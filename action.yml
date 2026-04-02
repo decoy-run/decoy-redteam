@@ -1,0 +1,129 @@
+name: Decoy Red Team
+description: Autonomous red team for MCP servers — sends adversarial payloads, proves exploitation, reports findings.
+author: decoy-run
+
+branding:
+  icon: target
+  color: red
+
+inputs:
+  target:
+    description: Target a specific MCP server by name
+    required: false
+  category:
+    description: Comma-separated attack categories (input-injection, prompt-injection, credential-exposure, protocol-attacks, schema-boundary, privilege-escalation)
+    required: false
+  sarif:
+    description: Upload SARIF results to GitHub Security tab
+    required: false
+    default: "true"
+  token:
+    description: Decoy API token for Guard dashboard reporting and Pro features (or set DECOY_TOKEN secret)
+    required: false
+  pro:
+    description: Enable AI-adaptive attacks via Guard Pro (requires token)
+    required: false
+    default: "false"
+  full:
+    description: Include potentially destructive attacks (default is safe/read-only)
+    required: false
+    default: "false"
+
+outputs:
+  exit-code:
+    description: "0 = clean, 1 = high-risk issues, 2 = critical issues"
+  sarif-file:
+    description: Path to the SARIF output file
+  summary:
+    description: JSON summary of findings
+  stories:
+    description: Number of attack stories found
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+
+    - name: Run Decoy Red Team
+      id: redteam
+      shell: bash
+      env:
+        DECOY_TOKEN: ${{ inputs.token || '' }}
+        DECOY_REDTEAM_CONFIRM: "yes"
+        INPUT_TARGET: ${{ inputs.target }}
+        INPUT_CATEGORY: ${{ inputs.category }}
+        INPUT_PRO: ${{ inputs.pro }}
+        INPUT_FULL: ${{ inputs.full }}
+        INPUT_SARIF: ${{ inputs.sarif }}
+      run: |
+        # Build flags
+        FLAGS="--live --no-color"
+
+        if [ -n "$INPUT_TARGET" ]; then
+          FLAGS="$FLAGS --target=$INPUT_TARGET"
+        fi
+
+        if [ -n "$INPUT_CATEGORY" ]; then
+          FLAGS="$FLAGS --category=$INPUT_CATEGORY"
+        fi
+
+        if [ "$INPUT_PRO" = "true" ] && [ -n "$DECOY_TOKEN" ]; then
+          FLAGS="$FLAGS --pro --token=$DECOY_TOKEN"
+        elif [ -n "$DECOY_TOKEN" ]; then
+          FLAGS="$FLAGS --token=$DECOY_TOKEN"
+        fi
+
+        if [ "$INPUT_FULL" = "true" ]; then
+          FLAGS="$FLAGS --full"
+        fi
+
+        # Run red team with JSON for structured output — capture exit code
+        set +e
+        npx -y decoy-redteam@latest $FLAGS --json > "$RUNNER_TEMP/decoy-redteam.json" 2>"$RUNNER_TEMP/decoy-redteam.log"
+        RT_EXIT=$?
+        set -e
+
+        echo "exit-code=$RT_EXIT" >> "$GITHUB_OUTPUT"
+
+        # Extract summary from JSON
+        if [ -f "$RUNNER_TEMP/decoy-redteam.json" ]; then
+          STORIES=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/decoy-redteam.json','utf8'));console.log(d.stories?.length||0)}catch{console.log(0)}")
+          CRITICAL=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/decoy-redteam.json','utf8'));console.log(d.summary?.critical||0)}catch{console.log(0)}")
+          HIGH=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/decoy-redteam.json','utf8'));console.log(d.summary?.high||0)}catch{console.log(0)}")
+          MEDIUM=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/decoy-redteam.json','utf8'));console.log(d.summary?.medium||0)}catch{console.log(0)}")
+
+          echo "stories=$STORIES" >> "$GITHUB_OUTPUT"
+          echo "summary={\"critical\":$CRITICAL,\"high\":$HIGH,\"medium\":$MEDIUM,\"total\":$STORIES}" >> "$GITHUB_OUTPUT"
+        fi
+
+        # Generate SARIF if requested
+        if [ "$INPUT_SARIF" = "true" ]; then
+          npx -y decoy-redteam@latest $FLAGS --sarif > "$RUNNER_TEMP/decoy-redteam.sarif" 2>/dev/null || true
+          echo "sarif-file=$RUNNER_TEMP/decoy-redteam.sarif" >> "$GITHUB_OUTPUT"
+        fi
+
+        # Write job summary
+        echo "## Decoy Red Team" >> "$GITHUB_STEP_SUMMARY"
+        echo "" >> "$GITHUB_STEP_SUMMARY"
+        if [ "$RT_EXIT" -eq 0 ]; then
+          echo ":white_check_mark: **Clean** — no exploitable vulnerabilities found" >> "$GITHUB_STEP_SUMMARY"
+        elif [ "$RT_EXIT" -eq 1 ]; then
+          echo ":warning: **$STORIES findings** — $HIGH high severity" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo ":rotating_light: **$STORIES findings** — $CRITICAL critical, $HIGH high" >> "$GITHUB_STEP_SUMMARY"
+        fi
+        echo "" >> "$GITHUB_STEP_SUMMARY"
+        echo "Run \`npx decoy-redteam --live\` locally for full details." >> "$GITHUB_STEP_SUMMARY"
+
+        exit $RT_EXIT
+
+    - name: Upload SARIF to GitHub Security
+      if: always() && inputs.sarif == 'true' && steps.redteam.outputs.sarif-file != ''
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ steps.redteam.outputs.sarif-file }}
+        category: decoy-redteam
+      continue-on-error: true

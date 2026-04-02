@@ -90,18 +90,24 @@ npx decoy-redteam --live --category=input-injection,credential-exposure
 
 ## CI/CD
 
-### GitHub Actions
+### GitHub Action
 
 ```yaml
 - name: Red team MCP servers
-  run: npx decoy-redteam --live --sarif > redteam.sarif
-  env:
-    DECOY_REDTEAM_CONFIRM: "yes"
+  uses: decoy-run/decoy-redteam@v1
+```
 
-- name: Upload SARIF
-  uses: github/codeql-action/upload-sarif@v3
+With options:
+
+```yaml
+- name: Red team MCP servers
+  uses: decoy-run/decoy-redteam@v1
   with:
-    sarif_file: redteam.sarif
+    target: my-server          # Target a specific server
+    category: input-injection  # Specific attack categories
+    token: ${{ secrets.DECOY_TOKEN }}  # Upload to Guard dashboard
+    pro: true                  # AI-adaptive attacks (Pro)
+    sarif: true                # Upload to GitHub Security tab
 ```
 
 ### Exit codes
