@@ -1,0 +1,41 @@
+{
+  "name": "decoy-redteam",
+  "version": "0.1.0",
+  "description": "Autonomous red team tool for MCP servers. Finds exploitable vulnerabilities before attackers do.",
+  "type": "module",
+  "main": "index.mjs",
+  "bin": {
+    "decoy-redteam": "bin/cli.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "bin/",
+    "lib/"
+  ],
+  "keywords": [
+    "mcp",
+    "security",
+    "red-team",
+    "penetration-testing",
+    "ai-agent",
+    "vulnerability",
+    "prompt-injection",
+    "exploit"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/decoy-run/decoy-redteam"
+  },
+  "homepage": "https://decoy.run",
+  "bugs": {
+    "url": "https://github.com/decoy-run/decoy-redteam/issues"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT",
+  "author": "Decoy <agent@decoy.run>"
+}
