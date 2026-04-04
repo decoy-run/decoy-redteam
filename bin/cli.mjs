@@ -31,7 +31,7 @@ const sarifMode = flag("sarif");
 const dryRun = !args.includes("--live");
 const fullMode = flag("full");
 const helpMode = flag("help") || flag("h");
-const versionMode = flag("version") || flag("V");
+const versionMode = args.includes("--version") || args.includes("-V");
 const quietMode = flag("quiet") || flag("q");
 const briefMode = flag("brief");
 const proMode = flag("pro");
@@ -49,7 +49,7 @@ const noColor = flag("no-color") ||
   (!isTTY && !process.env.FORCE_COLOR);
 
 const c = noColor
-  ? { bold: "", dim: "", red: "", green: "", yellow: "", orange: "", cyan: "", magenta: "", reset: "", underline: "" }
+  ? { bold: "", dim: "", red: "", green: "", yellow: "", orange: "", cyan: "", magenta: "", white: "", reset: "", underline: "" }
   : {
     bold: "\x1b[1m",
     dim: "\x1b[2m",
@@ -59,9 +59,15 @@ const c = noColor
     orange: "\x1b[38;5;208m",
     cyan: "\x1b[36m",
     magenta: "\x1b[35m",
+    white: "\x1b[37m",
     reset: "\x1b[0m",
     underline: "\x1b[4m",
   };
+
+if (jsonMode && sarifMode) {
+  process.stderr.write("error: --json and --sarif are mutually exclusive\n");
+  process.exit(1);
+}
 
 const SEV_COLOR = { critical: c.red, high: c.red, medium: c.yellow, low: c.dim };
 const SEV_ICON = { critical: "✗", high: "!", medium: "~", low: " " };
@@ -88,7 +94,7 @@ function spinner(label) {
   return {
     stop(msg) {
       clearInterval(id);
-      process.stderr.write("\r" + " ".repeat(label.length + 10) + "\r");
+      process.stderr.write("\r\x1b[K");
       if (msg) status(msg);
     },
   };
@@ -223,9 +229,9 @@ async function uploadResults(stories, coverage, servers, token) {
   };
 
   try {
-    const res = await fetch(`https://app.decoy.run/api/redteam/upload?token=${token}`, {
+    const res = await fetch(`https://app.decoy.run/api/redteam/upload`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
       body: JSON.stringify(payload),
     });
     if (res.ok) {
@@ -254,12 +260,24 @@ async function main() {
 
   status(`\n  ${c.bold}decoy-redteam${c.reset} ${c.dim}v${VERSION}${c.reset}\n`);
 
+  // Authorization warning — required for a red team tool
+  if (process.env.DECOY_REDTEAM_AUTHORIZED !== "1") {
+    if (dryRun) {
+      status(`  ${c.yellow}⚠${c.reset}  decoy-redteam tests ${c.bold}YOUR OWN${c.reset} MCP servers for vulnerabilities.`);
+      status(`     Only run against servers you own or have explicit authorization to test.`);
+      status(`     By proceeding, you confirm you have authorization for this security test.\n`);
+    }
+    // In --live mode, the warning is shown as part of the confirmation prompt below
+  }
+
   // Pro mode
   if (proMode) {
     if (tokenArg) {
       // Validate token against Guard API
       try {
-        const res = await fetch(`https://app.decoy.run/api/billing?token=${tokenArg}`);
+        const res = await fetch(`https://app.decoy.run/api/billing`, {
+          headers: { "Authorization": `Bearer ${tokenArg}` },
+        });
         const billing = await res.json();
         if (billing.plan === "pro" || billing.plan === "business") {
           const usage = billing.redteamUsage || {};
@@ -299,7 +317,7 @@ async function main() {
     process.exit(0);
   }
 
-  const hosts = configs.map(c => c.host);
+  const hosts = configs.map(cfg => cfg.host);
   const totalServers = new Set(configs.flatMap(c => Object.keys(c.servers))).size;
   status(`  ${c.dim}Hosts:${c.reset} ${hosts.join(", ")}`);
   status(`  ${c.dim}Servers:${c.reset} ${totalServers}${targetServer ? ` (targeting: ${targetServer})` : ""}\n`);
@@ -381,9 +399,9 @@ async function main() {
 
     const sp3 = spinner("Analyzing code + generating attacks…");
     try {
-      const res = await fetch(`https://app.decoy.run/api/redteam/plan?token=${tokenArg}`, {
+      const res = await fetch(`https://app.decoy.run/api/redteam/plan`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${tokenArg}` },
         body: JSON.stringify({ servers: serverSchemas }),
       });
       if (res.ok) {
@@ -475,6 +493,12 @@ async function main() {
     status(`  ${c.red}These may write files, execute commands, or modify data.${c.reset}\n`);
   }
 
+  if (process.env.DECOY_REDTEAM_AUTHORIZED !== "1") {
+    status(`  ${c.yellow}⚠${c.reset}  decoy-redteam tests ${c.bold}YOUR OWN${c.reset} MCP servers for vulnerabilities.`);
+    status(`     Only run against servers you own or have explicit authorization to test.`);
+    status(`     By proceeding, you confirm you have authorization for this security test.\n`);
+  }
+
   const proceed = await confirm("Execute attacks? (yes/no)");
   if (!proceed) {
     status("\n  Aborted.\n");
@@ -499,7 +523,7 @@ async function main() {
         if (now - lastUpdate > 150) {
           const cat = attack.category.replace(/-/g, " ");
           const pct = Math.round((completed / total) * 100);
-          process.stderr.write(`\r  ${c.dim}⠋ ${pct}% · ${cat}${" ".repeat(30)}${c.reset}`);
+          process.stderr.write(`\r\x1b[K  ${c.dim}⠋ ${pct}% · ${cat}${c.reset}`);
           lastUpdate = now;
         }
       }
@@ -529,9 +553,9 @@ async function main() {
         tools: s.tools.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
       }));
 
-      const iterRes = await fetch(`https://app.decoy.run/api/redteam/iterate?token=${tokenArg}`, {
+      const iterRes = await fetch(`https://app.decoy.run/api/redteam/iterate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${tokenArg}` },
         body: JSON.stringify({ servers: serverSchemas, results: resultSummary }),
       });
 
@@ -570,7 +594,7 @@ async function main() {
               if (isTTY && !quietMode && !jsonMode && !sarifMode) {
                 const now = Date.now();
                 if (now - lastUpdate > 150) {
-                  process.stderr.write(`\r  ${c.dim}⠋ refining · ${completed}/${total}${" ".repeat(20)}${c.reset}`);
+                  process.stderr.write(`\r\x1b[K  ${c.dim}⠋ refining · ${completed}/${total}${c.reset}`);
                   lastUpdate = now;
                 }
               }
@@ -717,19 +741,6 @@ function printStories(stories) {
     status(`  ${c.dim}  ${low.length} low: ${low.map(s => s.title.split(" — ")[0]).join(", ")}${c.reset}`);
     status("");
   }
-}
-
-function printCoverage(coverage) {
-  status(`  ${c.dim}── Coverage ──${c.reset}\n`);
-  status(`  Tested:      ${coverage.executed} of ${coverage.total} attack patterns (${c.bold}${coverage.percentage}%${c.reset})`);
-  status(`  Layer 1:     ${coverage.layer1} deterministic patterns`);
-  if (coverage.layer2 > 0) {
-    status(`  Layer 2:     ${c.dim}~${coverage.layer2} AI-adaptive + encoding variants${c.reset}`);
-  }
-  if (coverage.layer3 > 0) {
-    status(`  Layer 3:     ${c.dim}~${coverage.layer3} cross-server attack chains (${coverage.serverCount} servers)${c.reset}`);
-  }
-  status("");
 }
 
 function printSummary(stories, results, servers, coverage) {

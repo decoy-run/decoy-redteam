@@ -83,6 +83,32 @@ Mock server at `test/fixtures/mock-server.mjs` — deliberately vulnerable, used
 | `--quiet` | Suppress status messages |
 | `--no-color` | Disable colors |
 
+## `--brief` Flag
+
+The `--brief` flag (used with `--json`) outputs a minimal JSON summary instead of the full report. Designed for AI agents with limited context windows and CI/CD pipelines that only need pass/fail + counts.
+
+```bash
+npx decoy-redteam --live --json --brief
+```
+
+Output schema:
+
+```json
+{
+  "servers": 2,        // number of connected servers
+  "tools": 14,         // total tools across all servers
+  "attacks": 53,       // number of attacks executed
+  "critical": 1,       // findings by severity
+  "high": 3,
+  "medium": 5,
+  "low": 2,
+  "coverage": 18,      // assessment coverage percentage (0-100)
+  "status": "fail"     // "pass" (no critical/high) or "fail"
+}
+```
+
+All fields are always present. `status` is `"fail"` when `critical > 0 || high > 0`, otherwise `"pass"`.
+
 ## Exit Codes
 
 - `0` — No critical or high findings

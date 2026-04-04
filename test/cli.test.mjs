@@ -20,6 +20,20 @@ function run(args = [], env = {}) {
   }
 }
 
+describe("flag parsing", () => {
+  it("-V correctly triggers version mode", () => {
+    const { stdout, code } = run(["-V"]);
+    assert.strictEqual(code, 0);
+    assert.match(stdout, /decoy-redteam \d+\.\d+\.\d+/);
+  });
+
+  it("--json --sarif produces an error", () => {
+    const { stderr, code } = run(["--json", "--sarif"]);
+    assert.strictEqual(code, 1);
+    assert.ok(stderr.includes("mutually exclusive"), `Expected mutual exclusion error, got: ${stderr}`);
+  });
+});
+
 describe("CLI basics", () => {
   it("--version prints version", () => {
     const { stdout, code } = run(["--version"]);

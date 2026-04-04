@@ -4,6 +4,9 @@
   "description": "Autonomous red team tool for MCP servers. Finds exploitable vulnerabilities before attackers do.",
   "type": "module",
   "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs"
+  },
   "bin": {
     "decoy-redteam": "bin/cli.mjs"
   },
