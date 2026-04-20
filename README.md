@@ -80,12 +80,12 @@ npx decoy-redteam --live --category=input-injection,credential-exposure
 
   Tested:      142 of 340 attack patterns (42%)
   Layer 1:     142 deterministic patterns
-  Layer 2:     ~198 AI-adaptive + encoding variants (Guard Pro)
+  Layer 2:     ~198 AI-adaptive + encoding variants (paid plans)
 
   ── Summary ──
 
   3 critical · 2 high · 4 medium     142 attacks across 1 server
-  decoy.run/pro — full assessment + exportable reports
+  decoy.run/pricing — full assessment + exportable reports
 ```
 
 ## CI/CD
@@ -106,7 +106,7 @@ With options:
     target: my-server          # Target a specific server
     category: input-injection  # Specific attack categories
     token: ${{ secrets.DECOY_TOKEN }}  # Upload to Guard dashboard
-    pro: true                  # AI-adaptive attacks (Pro)
+    team: true                 # AI-adaptive attacks (paid plans)
     sarif: true                # Upload to GitHub Security tab
 ```
 
@@ -118,15 +118,18 @@ With options:
 | 1 | High-risk findings |
 | 2 | Critical findings |
 
-## Guard Pro
+## Advanced AI-powered red team (paid plans)
 
-Free `decoy-redteam` runs 53 deterministic attack patterns. [Guard Pro](https://decoy.run/pro) adds:
+Free `decoy-redteam` runs 53 deterministic attack patterns. The paid tiers on
+[Decoy Guard](https://decoy.run/pricing) (Team $29/user/mo, Business $99/user/mo) add:
 
 - **AI-adaptive attacks** — LLM-generated payloads specific to your tool schemas
 - **Encoding bypass suite** — 25+ encoding variants per injection vector
 - **Cross-server chain discovery** — finds attack paths across multiple servers
 - **Exportable HTML reports** — branded, print-ready security assessments
 - **Continuous red teaming** — scheduled runs with drift detection
+
+Run with `--team --token=YOUR_TOKEN`. (`--pro` is kept as a deprecated alias.)
 
 ## Library
 

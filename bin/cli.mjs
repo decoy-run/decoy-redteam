@@ -34,7 +34,11 @@ const helpMode = flag("help") || flag("h");
 const versionMode = args.includes("--version") || args.includes("-V");
 const quietMode = flag("quiet") || flag("q");
 const briefMode = flag("brief");
-const proMode = flag("pro");
+// --team is the primary flag; --pro is a deprecated alias kept for existing scripts.
+const teamMode = flag("team") || flag("pro");
+if (flag("pro") && !flag("team")) {
+  process.stderr.write("[deprecated] --pro is renamed to --team. Please update your scripts.\n");
+}
 const targetServer = flagVal("target");
 const categoryFilter = flagVal("category")?.split(",");
 const tokenArg = flagVal("token") || process.env.DECOY_TOKEN;
@@ -150,10 +154,11 @@ ${c.bold}Output${c.reset}
   --quiet, -q      Suppress status messages
   --no-color       Disable color output
 
-${c.bold}Guard Pro${c.reset}
-  --pro                AI-adaptive attacks + source code analysis
-  --pro --token=TOKEN  Authenticate with Guard account
-  --pro --repo=OWNER/REPO  Fetch source from GitHub (public or with GITHUB_TOKEN)
+${c.bold}Advanced AI-powered red team${c.reset} (Team / Business plans)
+  --team               AI-adaptive attacks + source code analysis
+  --team --token=TOKEN Authenticate with Decoy Guard account
+  --team --repo=OWNER/REPO  Fetch source from GitHub (public or with GITHUB_TOKEN)
+  --pro                Deprecated alias for --team
 
 ${c.bold}Filters${c.reset}
   --target=NAME    Only attack the named server
@@ -170,7 +175,7 @@ ${c.bold}Examples${c.reset}
   npx decoy-redteam --live --json             Machine-readable results
   npx decoy-redteam --live --json | jq '.summary'   Just the summary
   npx decoy-redteam --live --sarif > rt.sarif SARIF for GitHub Security tab
-  npx decoy-redteam --pro --token=xxx         AI-adaptive attacks (Guard Pro)
+  npx decoy-redteam --team --token=xxx        AI-adaptive attacks (paid plans)
   DECOY_REDTEAM_CONFIRM=yes npx decoy-redteam --live --json   CI/CD usage
 
 ${c.bold}Exit codes${c.reset}
@@ -239,7 +244,7 @@ async function uploadResults(stories, coverage, servers, token) {
     } else {
       const body = await res.json().catch(() => ({}));
       if (res.status === 403) {
-        status(`  ${c.dim}↳ Upload requires Guard Pro  decoy.run/pro${c.reset}\n`);
+        status(`  ${c.dim}↳ Upload requires Advanced AI-powered red team  decoy.run/pricing${c.reset}\n`);
       } else {
         status(`  ${c.yellow}!${c.reset} ${c.dim}Upload failed: ${body.error || res.status}${c.reset}\n`);
       }
@@ -271,7 +276,7 @@ async function main() {
   }
 
   // Pro mode
-  if (proMode) {
+  if (teamMode) {
     if (tokenArg) {
       // Validate token against Guard API
       try {
@@ -286,7 +291,7 @@ async function main() {
         } else {
           status(`  ${c.yellow}Your account is on the ${billing.plan || "free"} plan.${c.reset}`);
           status(`  Upgrade to Pro for AI-adaptive attacks and exportable reports.\n`);
-          status(`  ${c.cyan}decoy.run/pro${c.reset}\n`);
+          status(`  ${c.cyan}decoy.run/pricing${c.reset}\n`);
           process.exit(0);
         }
       } catch {
@@ -294,10 +299,10 @@ async function main() {
         process.exit(1);
       }
     } else {
-      status(`  ${c.bold}Guard Pro${c.reset} — AI-adaptive attacks, cross-server chains, exportable reports\n`);
-      status(`  To use Pro features, sign up and pass your token:\n`);
-      status(`  ${c.cyan}npx decoy-redteam --pro --token=YOUR_TOKEN${c.reset}\n`);
-      status(`  Don't have an account? Get started at ${c.underline}decoy.run/pro${c.reset}\n`);
+      status(`  ${c.bold}Advanced AI-powered red team${c.reset} — adaptive attacks, cross-server chains, exportable reports\n`);
+      status(`  Available on Decoy Guard paid plans. Sign up and pass your token:\n`);
+      status(`  ${c.cyan}npx decoy-redteam --team --token=YOUR_TOKEN${c.reset}\n`);
+      status(`  Don't have an account? Get started at ${c.underline}decoy.run/pricing${c.reset}\n`);
       process.exit(0);
     }
   }
@@ -354,7 +359,7 @@ async function main() {
 
   // Pro: extract source code + fetch AI-adaptive attacks
   let proPlan = [];
-  if (proMode && tokenArg) {
+  if (teamMode && tokenArg) {
     // Extract source code — local (node_modules) and/or GitHub
     const sp3a = spinner(repoArg ? "Fetching source from GitHub…" : "Reading server source code…");
 
@@ -471,7 +476,7 @@ async function main() {
 
     const untested = coverage.total - coverage.executed;
     if (untested > 0 && coverage.percentage < 90) {
-      status(`  ${c.dim}Guard Pro would add ~${untested} AI-adaptive patterns  decoy.run/pro${c.reset}`);
+      status(`  ${c.dim}Advanced AI-powered red team would add ~${untested} AI-adaptive patterns  decoy.run/pricing${c.reset}`);
     }
 
     status(`\n  ${c.cyan}npx decoy-redteam --live${c.reset}              Execute attacks`);
@@ -513,7 +518,7 @@ async function main() {
   // Execute Phase 1
   let lastUpdate = 0;
   const startTime = performance.now();
-  const phaseLabel = proMode ? "Phase 1 — deterministic" + (proPlan.length > 0 ? " + AI-adaptive" : "") : "Attacking";
+  const phaseLabel = teamMode ? "Phase 1 — deterministic" + (proPlan.length > 0 ? " + AI-adaptive" : "") : "Attacking";
   const sp2 = spinner(phaseLabel + "…");
   const results = await executeAttacks(fullPlan, connected, {
     dryRun: false,
@@ -534,7 +539,7 @@ async function main() {
 
   // Phase 2 — Iterate: send results to API, get refined attacks, execute
   let iterateResults = [];
-  if (proMode && tokenArg && proPlan.length > 0) {
+  if (teamMode && tokenArg && proPlan.length > 0) {
     const sp4 = spinner("Phase 2 — analyzing results, generating refined attacks…");
     try {
       // Summarize results for the API
@@ -721,7 +726,7 @@ function printStories(stories) {
     status(`    ${c.dim}→${c.reset} ${story.remediation}`);
 
     if (story.isTaste) {
-      status(`    ${c.cyan}↳ Guard Pro tests 25+ encoding variants per vector${c.reset}`);
+      status(`    ${c.cyan}↳ Advanced AI-powered red team tests 25+ encoding variants per vector${c.reset}`);
     }
 
     status("");
@@ -765,13 +770,13 @@ function printSummary(stories, results, servers, coverage) {
   }
 
   // Coverage + Pro upsell (only for free users)
-  if (!proMode) {
+  if (!teamMode) {
     const untested = coverage.total - coverage.executed;
     if (untested > 0 && coverage.percentage < 90) {
       status("");
       status(`  ${c.dim}Assessment coverage:${c.reset} ${c.bold}${coverage.percentage}%${c.reset}  ${c.dim}(${coverage.executed} of ${coverage.total} patterns)${c.reset}`);
       status("");
-      status(`  ${c.bold}Guard Pro${c.reset} adds ${untested} AI-adaptive attack patterns:`);
+      status(`  ${c.bold}Advanced AI-powered red team${c.reset} adds ${untested} AI-adaptive attack patterns:`);
       if (coverage.layer2 > 0) {
         status(`  ${c.dim}·${c.reset} Payloads generated for your ${coverage.toolCount} tool schemas`);
         status(`  ${c.dim}·${c.reset} 25+ encoding bypass variants per injection vector`);
@@ -782,8 +787,8 @@ function printSummary(stories, results, servers, coverage) {
       status(`  ${c.dim}·${c.reset} Exportable HTML report for security reviews`);
       status(`  ${c.dim}·${c.reset} Continuous red teaming with drift detection`);
       status("");
-      status(`  ${c.cyan}npx decoy-redteam --pro${c.reset}       Get started`);
-      status(`  ${c.dim}decoy.run/pro${c.reset}                Learn more`);
+      status(`  ${c.cyan}npx decoy-redteam --team${c.reset}      Get started`);
+      status(`  ${c.dim}decoy.run/pricing${c.reset}                Learn more`);
     }
   }
   status("");

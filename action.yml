@@ -18,10 +18,14 @@ inputs:
     required: false
     default: "true"
   token:
-    description: Decoy API token for Guard dashboard reporting and Pro features (or set DECOY_TOKEN secret)
+    description: Decoy API token for Guard dashboard reporting and paid features (or set DECOY_TOKEN secret)
     required: false
+  team:
+    description: Enable AI-adaptive attacks (requires token on a Team or Business plan)
+    required: false
+    default: "false"
   pro:
-    description: Enable AI-adaptive attacks via Guard Pro (requires token)
+    description: Deprecated alias for `team`. Keeps existing workflows working.
     required: false
     default: "false"
   full:
@@ -55,6 +59,7 @@ runs:
         DECOY_REDTEAM_CONFIRM: "yes"
         INPUT_TARGET: ${{ inputs.target }}
         INPUT_CATEGORY: ${{ inputs.category }}
+        INPUT_TEAM: ${{ inputs.team }}
         INPUT_PRO: ${{ inputs.pro }}
         INPUT_FULL: ${{ inputs.full }}
         INPUT_SARIF: ${{ inputs.sarif }}
@@ -70,8 +75,8 @@ runs:
           FLAGS="$FLAGS --category=$INPUT_CATEGORY"
         fi
 
-        if [ "$INPUT_PRO" = "true" ] && [ -n "$DECOY_TOKEN" ]; then
-          FLAGS="$FLAGS --pro --token=$DECOY_TOKEN"
+        if { [ "$INPUT_TEAM" = "true" ] || [ "$INPUT_PRO" = "true" ]; } && [ -n "$DECOY_TOKEN" ]; then
+          FLAGS="$FLAGS --team --token=$DECOY_TOKEN"
         elif [ -n "$DECOY_TOKEN" ]; then
           FLAGS="$FLAGS --token=$DECOY_TOKEN"
         fi
