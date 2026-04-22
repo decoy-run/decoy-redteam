@@ -48,10 +48,8 @@ Or pin it in your CI:
 
 ## 🎓 Docs
 
-- [Quickstart](https://decoy.run/docs/redteam/overview)
-- [CLI reference](https://decoy.run/docs/redteam/cli)
-- [Attack catalog](https://decoy.run/docs/redteam/attacks)
-- [CI/CD integration](https://decoy.run/docs/redteam/ci-cd)
+- [Overview](https://decoy.run/docs/redteam/overview)
+- [OWASP Top 10 for Agentic Applications 2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/)
 
 ## 🗂 What it tests
 
