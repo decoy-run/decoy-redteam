@@ -78,6 +78,114 @@ describe("matchAttacks", () => {
     assert.strictEqual(cmdAttacks.length, 0, "Command injection should not match file tools");
   });
 
+  it("matches SSRF to HTTP-client tools with a url param", () => {
+    const tool = { name: "http_request", description: "Make an HTTP request", inputSchema: { properties: { url: { type: "string" } } } };
+    const matched = matchAttacks(tool, tool.inputSchema);
+    const ssrf = matched.filter(a => a.subcategory === "ssrf");
+    assert.ok(ssrf.length >= 2, `Expected 2+ SSRF attacks, got ${ssrf.length}`);
+  });
+
+  it("matches SSRF to fetch-style tools with an endpoint param", () => {
+    const tool = { name: "fetch_data", description: "Fetch", inputSchema: { properties: { endpoint: { type: "string" } } } };
+    const matched = matchAttacks(tool, tool.inputSchema);
+    const ssrf = matched.filter(a => a.subcategory === "ssrf");
+    assert.ok(ssrf.length >= 2, `Expected 2+ SSRF attacks, got ${ssrf.length}`);
+  });
+
+  it("does not match SSRF to get_* tools with a target_id param", () => {
+    const tool = { name: "get_user", description: "Fetch a user record", inputSchema: { properties: { target_id: { type: "string" } } } };
+    const matched = matchAttacks(tool, tool.inputSchema);
+    const ssrf = matched.filter(a => a.subcategory === "ssrf");
+    assert.strictEqual(ssrf.length, 0, "SSRF should not target non-HTTP get_* tools");
+  });
+
+  it("does not match SSRF to post_* tools with a message param", () => {
+    const tool = { name: "post_comment", description: "Post a comment", inputSchema: { properties: { message: { type: "string" } } } };
+    const matched = matchAttacks(tool, tool.inputSchema);
+    const ssrf = matched.filter(a => a.subcategory === "ssrf");
+    assert.strictEqual(ssrf.length, 0, "SSRF should not target non-HTTP post_* tools");
+  });
+
+  it("does not match SQL injection to shell tools (execute_command)", () => {
+    const tool = { name: "execute_command", description: "Run a shell command", inputSchema: { properties: { command: { type: "string" } } } };
+    const matched = matchAttacks(tool, tool.inputSchema);
+    const sqlAttacks = matched.filter(a => a.subcategory === "sql");
+    assert.strictEqual(sqlAttacks.length, 0, "SQL attacks should not target shell execute_command tools");
+  });
+
+  it("does not match SQL injection to calculator tools (expression param)", () => {
+    const tool = { name: "calculator", description: "Evaluate a math expression", inputSchema: { properties: { expression: { type: "string" } } } };
+    const matched = matchAttacks(tool, tool.inputSchema);
+    const sqlAttacks = matched.filter(a => a.subcategory === "sql");
+    assert.strictEqual(sqlAttacks.length, 0, "SQL attacks should not target expression-param tools");
+  });
+
+  it("does not match command injection to run_* tools (run_migration, browser_run_code)", () => {
+    for (const name of ["run_migration", "browser_run_code", "run_test"]) {
+      const tool = { name, description: "Run something", inputSchema: { properties: { args: { type: "string" } } } };
+      const matched = matchAttacks(tool, tool.inputSchema);
+      const cmdAttacks = matched.filter(a => a.subcategory === "command");
+      assert.strictEqual(cmdAttacks.length, 0, `Command injection should not target ${name}`);
+    }
+  });
+
+  it("does not match command injection to tools with a code param (country_code, auth_code)", () => {
+    const tool = { name: "verify_user", description: "Verify with code", inputSchema: { properties: { code: { type: "string" } } } };
+    const matched = matchAttacks(tool, tool.inputSchema);
+    const cmdAttacks = matched.filter(a => a.subcategory === "command");
+    assert.strictEqual(cmdAttacks.length, 0, "Command injection should not target bare code-param tools");
+  });
+
+  it("still matches command injection to legitimate shell tools", () => {
+    const tool = { name: "execute_command", description: "Run shell", inputSchema: { properties: { command: { type: "string" } } } };
+    const matched = matchAttacks(tool, tool.inputSchema);
+    const cmdAttacks = matched.filter(a => a.subcategory === "command");
+    assert.ok(cmdAttacks.length >= 2, `Expected 2+ command attacks, got ${cmdAttacks.length}`);
+  });
+
+  it("does not match file attacks to tools that merely have `name` or `location` params", () => {
+    const tool = { name: "create_user", description: "Create a user", inputSchema: { properties: { name: { type: "string" }, location: { type: "string" } } } };
+    const matched = matchAttacks(tool, tool.inputSchema);
+    const pathAttacks = matched.filter(a => a.subcategory === "path-traversal");
+    assert.strictEqual(pathAttacks.length, 0, "File attacks should not target arbitrary name/location params");
+  });
+
+  it("does not match file attacks to `open_connection` or `load_balancer`", () => {
+    for (const name of ["open_connection", "load_balancer", "open_session"]) {
+      const tool = { name, description: "test", inputSchema: { properties: { path: { type: "string" } } } };
+      const matched = matchAttacks(tool, tool.inputSchema);
+      const pathAttacks = matched.filter(a => a.subcategory === "path-traversal");
+      assert.strictEqual(pathAttacks.length, 0, `File attacks should not target ${name}`);
+    }
+  });
+
+  it("still matches file attacks to compound file tools (cat_file, open_file, load_file)", () => {
+    for (const name of ["cat_file", "open_file", "load_file", "fetch_file"]) {
+      const tool = { name, description: "file op", inputSchema: { properties: { path: { type: "string" } } } };
+      const matched = matchAttacks(tool, tool.inputSchema);
+      const pathAttacks = matched.filter(a => a.subcategory === "path-traversal");
+      assert.ok(pathAttacks.length >= 2, `Expected 2+ path-traversal for ${name}, got ${pathAttacks.length}`);
+    }
+  });
+
+  it("does not match write-exfil attacks to `save_user` or `put_object`", () => {
+    for (const name of ["save_user", "put_object", "save_preferences"]) {
+      const tool = { name, description: "not a file op", inputSchema: { properties: { path: { type: "string" }, content: { type: "string" } } } };
+      const matched = matchAttacks(tool, tool.inputSchema);
+      const hadWriteAttack = matched.some(a => a.subcategory === "write-exfil");
+      assert.strictEqual(hadWriteAttack, false, `write-exfil should not target ${name}`);
+    }
+  });
+
+  it("still matches write-exfil to compound file-write tools (write_file, save_file, update_file)", () => {
+    for (const name of ["write_file", "save_file", "update_file", "append_file"]) {
+      const tool = { name, description: "file op", inputSchema: { properties: { path: { type: "string" }, content: { type: "string" } } } };
+      const matched = matchAttacks(tool, tool.inputSchema);
+      const hadWriteAttack = matched.some(a => a.subcategory === "write-exfil");
+      assert.strictEqual(hadWriteAttack, true, `write-exfil should target ${name}`);
+    }
+  });
+
   it("skips _raw protocol attacks", () => {
     const tool = { name: "anything", description: "test", inputSchema: { properties: { x: { type: "string" } } } };
     const matched = matchAttacks(tool, tool.inputSchema);

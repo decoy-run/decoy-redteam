@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
-import { discoverConfigs, probeServers, planAttacks, executeAttacks, buildStories, closeAll } from "../lib/engine.mjs";
+import { discoverConfigs, probeServers, planAttacks, executeAttacks, buildStories, closeAll, isInteractiveSideEffectTool } from "../lib/engine.mjs";
 import { calculateCoverage } from "../lib/coverage.mjs";
 import { toSarif, toJson } from "../lib/report.mjs";
 import { extractSource, extractGitHubSource } from "../lib/source.mjs";
@@ -73,8 +73,8 @@ if (jsonMode && sarifMode) {
   process.exit(1);
 }
 
-const SEV_COLOR = { critical: c.red, high: c.red, medium: c.yellow, low: c.dim };
-const SEV_ICON = { critical: "✗", high: "!", medium: "~", low: " " };
+const SEV_COLOR = { critical: c.red, high: c.orange, medium: c.yellow, low: c.dim };
+const SEV_ICON = { critical: "✗", high: "✗", medium: "~", low: " " };
 
 // ─── Output helpers ───
 
@@ -88,12 +88,13 @@ function data(msg) {
 
 // ─── Spinner ───
 
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 function spinner(label) {
   if (!isTTY || quietMode || jsonMode || sarifMode) return { stop() {} };
-  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   let i = 0;
   const id = setInterval(() => {
-    process.stderr.write(`\r  ${c.dim}${frames[i++ % frames.length]} ${label}${c.reset}`);
+    process.stderr.write(`\r\x1b[K  ${c.dim}${SPINNER_FRAMES[i++ % SPINNER_FRAMES.length]} ${label}${c.reset}`);
   }, 80);
   return {
     stop(msg) {
@@ -143,9 +144,8 @@ ${c.bold}Usage${c.reset}
 
 ${c.bold}Modes${c.reset}
   (default)        Dry-run — plan attacks, show what would be tested
-  --live           Execute attacks (requires confirmation)
-  --live --safe    Read-only + protocol attacks only (default when live)
-  --live --full    Include potentially destructive attacks (extra warning)
+  --live           Execute attacks (read-only + protocol, requires confirmation)
+  --live --full    Include destructive attacks and browser-automation tools (extra warning)
 
 ${c.bold}Output${c.reset}
   --json           JSON output to stdout
@@ -268,7 +268,7 @@ async function main() {
   // Authorization warning — required for a red team tool
   if (process.env.DECOY_REDTEAM_AUTHORIZED !== "1") {
     if (dryRun) {
-      status(`  ${c.yellow}⚠${c.reset}  decoy-redteam tests ${c.bold}YOUR OWN${c.reset} MCP servers for vulnerabilities.`);
+      status(`  ${c.yellow}⚠️${c.reset} decoy-redteam tests ${c.bold}YOUR OWN${c.reset} MCP servers for vulnerabilities.`);
       status(`     Only run against servers you own or have explicit authorization to test.`);
       status(`     By proceeding, you confirm you have authorization for this security test.\n`);
     }
@@ -356,6 +356,11 @@ async function main() {
   // Plan attacks
   const safe = !fullMode;
   const plan = planAttacks(connected, { safe, categories: categoryFilter });
+
+  // Count tools that planAttacks skipped in safe mode so we can disclose them
+  const skippedSideEffect = safe
+    ? connected.flatMap(s => s.tools.filter(isInteractiveSideEffectTool)).length
+    : 0;
 
   // Pro: extract source code + fetch AI-adaptive attacks
   let proPlan = [];
@@ -471,6 +476,10 @@ async function main() {
     }
     status(`\n  ${c.bold}${plan.length} attacks${c.reset} ready against ${connected.length} server${connected.length > 1 ? "s" : ""}`);
 
+    if (skippedSideEffect > 0) {
+      status(`  ${c.dim}Skipped ${skippedSideEffect} browser/window tool${skippedSideEffect > 1 ? "s" : ""} — use --full to include${c.reset}`);
+    }
+
     const coverage = calculateCoverage(connected, plan.length);
     status(`  ${c.dim}Assessment coverage:${c.reset} ${c.bold}${coverage.percentage}%${c.reset}`);
 
@@ -479,7 +488,7 @@ async function main() {
       status(`  ${c.dim}Advanced AI-powered red team would add ~${untested} AI-adaptive patterns  decoy.run/pricing${c.reset}`);
     }
 
-    status(`\n  ${c.cyan}npx decoy-redteam --live${c.reset}              Execute attacks`);
+    status(`\n  ${c.cyan}npx decoy-redteam --live${c.reset}                Execute attacks`);
     status(`  ${c.cyan}npx decoy-redteam --live --target=NAME${c.reset}  Target one server\n`);
 
     closeAll(servers);
@@ -491,15 +500,21 @@ async function main() {
   status(`  ${c.dim}── Live Mode ──${c.reset}\n`);
   status(`  Targets: ${connected.map(s => s.name).join(", ")}`);
   status(`  Attacks: ${plan.length}`);
-  status(`  Safety:  ${safe ? safetyLabel : `${c.red}${safetyLabel}${c.reset}`}\n`);
+  status(`  Safety:  ${safe ? safetyLabel : `${c.red}${safetyLabel}${c.reset}`}`);
+  if (skippedSideEffect > 0) {
+    status(`  ${c.dim}Skipped ${skippedSideEffect} browser/window tool${skippedSideEffect > 1 ? "s" : ""} — use --full to include${c.reset}`);
+  }
+  status("");
 
   if (!safe) {
     status(`  ${c.red}Warning: --full includes potentially destructive attacks.${c.reset}`);
-    status(`  ${c.red}These may write files, execute commands, or modify data.${c.reset}\n`);
+    status(`  ${c.red}These may write files, execute commands, or modify data.${c.reset}`);
+    status(`  ${c.red}Browser-automation tools (browser_*, navigate) will also be attacked,${c.reset}`);
+    status(`  ${c.red}which can briefly open real windows for each URL payload.${c.reset}\n`);
   }
 
   if (process.env.DECOY_REDTEAM_AUTHORIZED !== "1") {
-    status(`  ${c.yellow}⚠${c.reset}  decoy-redteam tests ${c.bold}YOUR OWN${c.reset} MCP servers for vulnerabilities.`);
+    status(`  ${c.yellow}⚠️${c.reset} decoy-redteam tests ${c.bold}YOUR OWN${c.reset} MCP servers for vulnerabilities.`);
     status(`     Only run against servers you own or have explicit authorization to test.`);
     status(`     By proceeding, you confirm you have authorization for this security test.\n`);
   }
@@ -517,25 +532,30 @@ async function main() {
 
   // Execute Phase 1
   let lastUpdate = 0;
+  let frameIdx = 0;
+  const interactive = isTTY && !quietMode && !jsonMode && !sarifMode;
   const startTime = performance.now();
   const phaseLabel = teamMode ? "Phase 1 — deterministic" + (proPlan.length > 0 ? " + AI-adaptive" : "") : "Attacking";
-  const sp2 = spinner(phaseLabel + "…");
+  if (interactive) {
+    process.stderr.write(`\r\x1b[K  ${c.dim}${SPINNER_FRAMES[0]} ${phaseLabel}…${c.reset}`);
+  }
   const results = await executeAttacks(fullPlan, connected, {
     dryRun: false,
     onProgress: ({ completed, total, attack }) => {
-      if (isTTY && !quietMode && !jsonMode && !sarifMode) {
-        const now = Date.now();
-        if (now - lastUpdate > 150) {
-          const cat = attack.category.replace(/-/g, " ");
-          const pct = Math.round((completed / total) * 100);
-          process.stderr.write(`\r\x1b[K  ${c.dim}⠋ ${pct}% · ${cat}${c.reset}`);
-          lastUpdate = now;
-        }
+      if (!interactive) return;
+      const now = Date.now();
+      if (now - lastUpdate > 150) {
+        const cat = attack.category.replace(/-/g, " ");
+        const pct = Math.round((completed / total) * 100);
+        const frame = SPINNER_FRAMES[frameIdx++ % SPINNER_FRAMES.length];
+        process.stderr.write(`\r\x1b[K  ${c.dim}${frame} ${phaseLabel} · ${pct}% · ${cat}${c.reset}`);
+        lastUpdate = now;
       }
     },
   });
+  if (interactive) process.stderr.write("\r\x1b[K");
   const p1Elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-  sp2.stop(`  ${c.dim}${results.length} attacks executed in ${p1Elapsed}s${c.reset}\n`);
+  status(`  ${c.dim}${results.length} attacks executed in ${p1Elapsed}s${c.reset}\n`);
 
   // Phase 2 — Iterate: send results to API, get refined attacks, execute
   let iterateResults = [];
@@ -592,21 +612,24 @@ async function main() {
         if (refinedPlan.length > 0) {
           sp4.stop(`  ${c.green}✓${c.reset} ${refinedPlan.length} refined attacks generated\n`);
 
-          const sp5 = spinner("Phase 2 — executing refined attacks…");
+          if (interactive) {
+            process.stderr.write(`\r\x1b[K  ${c.dim}${SPINNER_FRAMES[0]} Phase 2 — executing refined attacks…${c.reset}`);
+          }
           iterateResults = await executeAttacks(refinedPlan, connected, {
             dryRun: false,
             onProgress: ({ completed, total, attack }) => {
-              if (isTTY && !quietMode && !jsonMode && !sarifMode) {
-                const now = Date.now();
-                if (now - lastUpdate > 150) {
-                  process.stderr.write(`\r\x1b[K  ${c.dim}⠋ refining · ${completed}/${total}${c.reset}`);
-                  lastUpdate = now;
-                }
+              if (!interactive) return;
+              const now = Date.now();
+              if (now - lastUpdate > 150) {
+                const frame = SPINNER_FRAMES[frameIdx++ % SPINNER_FRAMES.length];
+                process.stderr.write(`\r\x1b[K  ${c.dim}${frame} Phase 2 · refining · ${completed}/${total}${c.reset}`);
+                lastUpdate = now;
               }
             },
           });
+          if (interactive) process.stderr.write("\r\x1b[K");
           const p2Elapsed = ((performance.now() - startTime) / 1000 - parseFloat(p1Elapsed)).toFixed(1);
-          sp5.stop(`  ${c.dim}${iterateResults.length} refined attacks executed in ${p2Elapsed}s${c.reset}\n`);
+          status(`  ${c.dim}${iterateResults.length} refined attacks executed in ${p2Elapsed}s${c.reset}\n`);
         } else {
           sp4.stop(`  ${c.dim}No additional attacks to refine${c.reset}\n`);
         }
@@ -741,9 +764,20 @@ function printStories(stories) {
     status("");
   }
 
-  // Low: single line
+  // Low: tally by title — raw list is noise (e.g. 17 protocol handshakes look identical)
   if (low.length > 0) {
-    status(`  ${c.dim}  ${low.length} low: ${low.map(s => s.title.split(" — ")[0]).join(", ")}${c.reset}`);
+    const counts = new Map();
+    for (const s of low) {
+      const title = s.title.split(" — ")[0];
+      counts.set(title, (counts.get(title) || 0) + 1);
+    }
+    const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    const TOP = 8;
+    const top = sorted.slice(0, TOP);
+    const more = sorted.length - top.length;
+    const formatted = top.map(([t, n]) => n > 1 ? `${t} ×${n}` : t).join(", ");
+    const tail = more > 0 ? `, +${more} more type${more > 1 ? "s" : ""}` : "";
+    status(`  ${c.dim}  ${low.length} low: ${formatted}${tail}${c.reset}`);
     status("");
   }
 }
@@ -754,7 +788,7 @@ function printSummary(stories, results, servers, coverage) {
 
   const parts = [];
   if (counts.critical > 0) parts.push(`${c.red}${counts.critical} critical${c.reset}`);
-  if (counts.high > 0) parts.push(`${c.red}${counts.high} high${c.reset}`);
+  if (counts.high > 0) parts.push(`${c.orange}${counts.high} high${c.reset}`);
   if (counts.medium > 0) parts.push(`${c.yellow}${counts.medium} medium${c.reset}`);
   if (counts.low > 0) parts.push(`${c.dim}${counts.low} low${c.reset}`);
 
@@ -767,6 +801,21 @@ function printSummary(stories, results, servers, coverage) {
   } else {
     status(`  ${c.red}✗${c.reset} ${parts.join(", ")}  ${c.dim}across ${serverCount} server${serverCount > 1 ? "s" : ""}${c.reset}`);
     status(`  ${c.dim}  Better to find it here than in prod.${c.reset}`);
+  }
+
+  // Next steps — what to actually do with these findings
+  if (stories.length > 0) {
+    const criticalOrHigh = counts.critical + counts.high;
+    status("");
+    status(`  ${c.bold}Next steps${c.reset}`);
+    if (criticalOrHigh > 0) {
+      status(`  ${c.dim}·${c.reset} Patch the ${criticalOrHigh} ${criticalOrHigh === 1 ? "finding" : "findings"} above — each story includes a ${c.dim}→${c.reset} remediation line.`);
+    } else {
+      status(`  ${c.dim}·${c.reset} Review medium/low findings — most are hardening opportunities, not exploits.`);
+    }
+    status(`  ${c.dim}·${c.reset} Re-run ${c.cyan}npx decoy-redteam --live${c.reset} after fixes to verify.`);
+    status(`  ${c.dim}·${c.reset} Install ${c.cyan}npx decoy-tripwire init${c.reset} to catch exploitation in the wild.`);
+    status(`  ${c.dim}·${c.reset} Export to SARIF for CI: ${c.cyan}npx decoy-redteam --live --sarif > findings.sarif${c.reset}`);
   }
 
   // Coverage + Pro upsell (only for free users)
@@ -788,7 +837,7 @@ function printSummary(stories, results, servers, coverage) {
       status(`  ${c.dim}·${c.reset} Continuous red teaming with drift detection`);
       status("");
       status(`  ${c.cyan}npx decoy-redteam --team${c.reset}      Get started`);
-      status(`  ${c.dim}decoy.run/pricing${c.reset}                Learn more`);
+      status(`  ${c.dim}decoy.run/pricing${c.reset}             Learn more`);
     }
   }
   status("");

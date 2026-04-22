@@ -83,6 +83,43 @@ describe("planAttacks", () => {
     assert.strictEqual(plan.length, 0);
   });
 
+  it("skips browser automation and window-opening tools in safe mode", () => {
+    const servers = [{
+      name: "playwright",
+      conn: true,
+      error: null,
+      tools: [
+        { name: "browser_navigate", description: "Navigate browser", inputSchema: { properties: { url: { type: "string" } } } },
+        { name: "browser_click", description: "Click", inputSchema: { properties: { selector: { type: "string" } } } },
+        { name: "navigate", description: "Navigate", inputSchema: { properties: { url: { type: "string" } } } },
+        { name: "take_screenshot", description: "Screenshot", inputSchema: { properties: {} } },
+        { name: "open_tab", description: "Open tab", inputSchema: { properties: { url: { type: "string" } } } },
+      ],
+    }];
+    const safe = planAttacks(servers, { safe: true });
+    const toolCalls = safe.filter(p => p.tool);
+    assert.strictEqual(toolCalls.length, 0, "Safe mode should skip browser automation tools");
+
+    const full = planAttacks(servers, { safe: false });
+    const fullToolCalls = full.filter(p => p.tool);
+    assert.ok(fullToolCalls.length > 0, "Full mode should include browser automation tools");
+  });
+
+  it("does not skip HTTP-client tools that merely fetch URLs", () => {
+    const servers = [{
+      name: "api",
+      conn: true,
+      error: null,
+      tools: [
+        { name: "http_request", description: "HTTP", inputSchema: { properties: { url: { type: "string" } } } },
+        { name: "fetch_data", description: "Fetch", inputSchema: { properties: { endpoint: { type: "string" } } } },
+      ],
+    }];
+    const plan = planAttacks(servers, { safe: true });
+    const ssrf = plan.filter(p => p.attack?.subcategory === "ssrf");
+    assert.ok(ssrf.length > 0, "SSRF should still run against pure HTTP clients in safe mode");
+  });
+
   it("adds one encoding taste per server", () => {
     const servers = [{
       name: "test-server",

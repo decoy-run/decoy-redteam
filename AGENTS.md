@@ -31,12 +31,14 @@ decoy-redteam/
 
 | Category | Count | What it tests |
 |----------|-------|---------------|
-| input-injection | 16 | SQL, command, path traversal, SSRF, template injection |
-| prompt-injection | 10 | Direct override, role hijack, indirect via output, encoding, multi-turn |
-| credential-exposure | 8 | .env, cloud creds, SSH keys, shell history, error oracle |
-| protocol-attacks | 7 | Malformed JSON-RPC, capability escalation, replay, method injection |
-| schema-boundary | 7 | Type coercion, null bytes, overflow, extra props, NoSQL operators |
-| privilege-escalation | 5 | Scope escape, undeclared access, dotfiles, argument smuggling |
+| input-injection | ~16 | SQL, command, path traversal, SSRF, template injection |
+| prompt-injection | ~10 | Direct override, role hijack, indirect via output, encoding, multi-turn |
+| credential-exposure | ~8 | .env, cloud creds, SSH keys, shell history, error oracle |
+| protocol-attacks | ~7 | Malformed JSON-RPC, capability escalation, replay, method injection |
+| schema-boundary | ~7 | Type coercion, null bytes, overflow, extra props, NoSQL operators |
+| privilege-escalation | ~5 | Scope escape, undeclared access, dotfiles, argument smuggling |
+
+Total: **54** (run `grep -c "^    id:" lib/attacks.mjs` to confirm).
 
 ## Safety Model
 
@@ -60,12 +62,16 @@ Three upgrade triggers built into the output:
 - **Stories, not findings.** Output unit is a narrative attack chain.
 - **Layer 2/3 server-side.** LLM logic lives in decoy-app, not in this package. Protects the moat.
 - **Safe by default.** Dry-run unless explicitly --live. No destructive attacks unless --full.
+- **Browser-automation tools skipped in safe mode.** `browser_*`, `navigate`, `screenshot`, etc. are excluded from the attack plan — otherwise SSRF URL payloads open real browser windows for each attack. See `isInteractiveSideEffectTool` in `lib/engine.mjs`. Disable via `--full`.
+- **Targeting regexes require both a tool-name marker AND a param-name marker.** The `AND` constraint prevents SQL attacks from running against tools whose names accidentally contain `execute`, and similar false positives. The comment block above each target in `lib/attacks.mjs` documents what was removed and why.
 
 ## Testing
 
 ```bash
-npm test                    # full test suite (39 tests)
-node --test test/cli.test.mjs   # CLI tests only
+npm test                                    # full test suite (86 tests)
+node --test test/cli.test.mjs               # CLI tests only
+node --test test/attacks.test.mjs           # attack catalog + matchAttacks
+node --test test/engine.test.mjs            # plan/execute/buildStories
 ```
 
 Mock server at `test/fixtures/mock-server.mjs` — deliberately vulnerable, used by integration tests.
