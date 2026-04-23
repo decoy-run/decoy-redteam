@@ -43,6 +43,7 @@ const targetServer = flagVal("target");
 const categoryFilter = flagVal("category")?.split(",");
 const tokenArg = flagVal("token") || process.env.DECOY_TOKEN;
 const repoArg = flagVal("repo");
+const API_BASE = (process.env.DECOY_API_BASE || "https://app.decoy.run/api").replace(/\/$/, "");
 
 // ─── Color support ───
 
@@ -91,7 +92,11 @@ function data(msg) {
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 function spinner(label) {
-  if (!isTTY || quietMode || jsonMode || sarifMode) return { stop() {} };
+  // Non-TTY (and machine-readable modes): no animation, but still surface the final status message
+  // so phase transitions are visible in piped output, CI logs, and test harnesses.
+  if (!isTTY || quietMode || jsonMode || sarifMode) {
+    return { stop(msg) { if (msg) status(msg); } };
+  }
   let i = 0;
   const id = setInterval(() => {
     process.stderr.write(`\r\x1b[K  ${c.dim}${SPINNER_FRAMES[i++ % SPINNER_FRAMES.length]} ${label}${c.reset}`);
@@ -234,7 +239,7 @@ async function uploadResults(stories, coverage, servers, token) {
   };
 
   try {
-    const res = await fetch(`https://app.decoy.run/api/redteam/upload`, {
+    const res = await fetch(`${API_BASE}/redteam/upload`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
       body: JSON.stringify(payload),
@@ -280,17 +285,17 @@ async function main() {
     if (tokenArg) {
       // Validate token against Guard API
       try {
-        const res = await fetch(`https://app.decoy.run/api/billing`, {
-          headers: { "Authorization": `Bearer ${tokenArg}` },
-        });
+        const res = await fetch(`${API_BASE}/billing?token=${encodeURIComponent(tokenArg)}`);
         const billing = await res.json();
-        if (billing.plan === "pro" || billing.plan === "business") {
+        const paidPlan = billing.plan === "team" || billing.plan === "pro" || billing.plan === "business";
+        if (paidPlan) {
           const usage = billing.redteamUsage || {};
           const remaining = (usage.limit || 20) - (usage.used || 0);
-          status(`  ${c.green}✓${c.reset} Guard ${billing.plan === "business" ? "Business" : "Pro"}  ${c.dim}${remaining} assessments remaining this month${c.reset}\n`);
+          const planLabel = billing.plan === "business" ? "Business" : "Team";
+          status(`  ${c.green}✓${c.reset} Guard ${planLabel}  ${c.dim}${remaining} assessments remaining this month${c.reset}\n`);
         } else {
           status(`  ${c.yellow}Your account is on the ${billing.plan || "free"} plan.${c.reset}`);
-          status(`  Upgrade to Pro for AI-adaptive attacks and exportable reports.\n`);
+          status(`  Upgrade to Team for AI-adaptive attacks and exportable reports.\n`);
           status(`  ${c.cyan}decoy.run/pricing${c.reset}\n`);
           process.exit(0);
         }
@@ -409,7 +414,7 @@ async function main() {
 
     const sp3 = spinner("Analyzing code + generating attacks…");
     try {
-      const res = await fetch(`https://app.decoy.run/api/redteam/plan`, {
+      const res = await fetch(`${API_BASE}/redteam/plan`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${tokenArg}` },
         body: JSON.stringify({ servers: serverSchemas }),
@@ -441,10 +446,10 @@ async function main() {
         sp3.stop(`  ${c.green}✓${c.reset} ${proPlan.length} AI-adaptive attacks generated\n`);
       } else {
         const err = await res.json().catch(() => ({}));
-        sp3.stop(`  ${c.yellow}!${c.reset} ${c.dim}Pro plan: ${err.error || res.status}${c.reset}\n`);
+        sp3.stop(`  ${c.yellow}!${c.reset} ${c.dim}AI-adaptive unavailable: ${err.error || res.status} — falling back to deterministic attacks${c.reset}\n`);
       }
     } catch (e) {
-      sp3.stop(`  ${c.yellow}!${c.reset} ${c.dim}Pro plan unavailable: ${e.message}${c.reset}\n`);
+      sp3.stop(`  ${c.yellow}!${c.reset} ${c.dim}AI-adaptive unavailable: ${e.message} — falling back to deterministic attacks${c.reset}\n`);
     }
   }
 
@@ -578,7 +583,7 @@ async function main() {
         tools: s.tools.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
       }));
 
-      const iterRes = await fetch(`https://app.decoy.run/api/redteam/iterate`, {
+      const iterRes = await fetch(`${API_BASE}/redteam/iterate`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${tokenArg}` },
         body: JSON.stringify({ servers: serverSchemas, results: resultSummary }),
