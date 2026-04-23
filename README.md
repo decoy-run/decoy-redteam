@@ -1,11 +1,7 @@
 <p align="center">
   <a href="https://decoy.run?utm_source=github&utm_medium=redteam_readme" target="_blank" rel="noopener noreferrer">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/decoy-run/decoy-redteam/main/.github/assets/logomark-dark.svg">
-      <img src="https://raw.githubusercontent.com/decoy-run/decoy-redteam/main/.github/assets/logomark-light.svg" height="48">
-    </picture>
+    <img alt="Decoy Red Team" src="https://raw.githubusercontent.com/decoy-run/decoy-redteam/main/.github/assets/hero.jpg" width="800">
   </a>
-  <br />
 </p>
 <h1 align="center">
   Decoy Red Team
