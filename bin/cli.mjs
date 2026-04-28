@@ -2,10 +2,12 @@
 
 // decoy-redteam CLI — autonomous red team for MCP servers
 
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
+import { spawn } from "node:child_process";
+import { homedir } from "node:os";
 import { discoverConfigs, probeServers, planAttacks, executeAttacks, buildStories, closeAll, isInteractiveSideEffectTool } from "../lib/engine.mjs";
 import { calculateCoverage } from "../lib/coverage.mjs";
 import { toSarif, toJson } from "../lib/report.mjs";
@@ -41,7 +43,23 @@ if (flag("pro") && !flag("team")) {
 }
 const targetServer = flagVal("target");
 const categoryFilter = flagVal("category")?.split(",");
-const tokenArg = flagVal("token") || process.env.DECOY_TOKEN;
+const TOKEN_FILE = join(homedir(), ".decoy", "token");
+function loadStoredToken() {
+  try {
+    const t = readFileSync(TOKEN_FILE, "utf8").trim();
+    return t.length >= 16 ? t : null;
+  } catch { return null; }
+}
+function saveStoredToken(token) {
+  mkdirSync(dirname(TOKEN_FILE), { recursive: true });
+  writeFileSync(TOKEN_FILE, token + "\n", { mode: 0o600 });
+}
+// tokenArg = explicit upload consent (uploads results to dashboard at the end
+// of a run). Only --token= and DECOY_TOKEN qualify — the stored ~/.decoy/token
+// is a sign-in convenience, not blanket telemetry consent. It's consulted only
+// inside `if (teamMode)` below as auth for the paid feature the user explicitly
+// opted into via --team.
+let tokenArg = flagVal("token") || process.env.DECOY_TOKEN;
 const repoArg = flagVal("repo");
 const API_BASE = (process.env.DECOY_API_BASE || "https://app.decoy.run/api").replace(/\/$/, "");
 
@@ -108,6 +126,54 @@ function spinner(label) {
       if (msg) status(msg);
     },
   };
+}
+
+// ─── Browser-based token capture ───
+// Same pattern as decoy-scan loginInteractive: opens the dashboard's Setup &
+// Tokens section, prompts for the user to paste their token, persists it to
+// ~/.decoy/token so subsequent --team runs don't need --token=.
+
+function openBrowser(url) {
+  const cmd = process.platform === "darwin" ? "open"
+    : process.platform === "win32" ? "cmd"
+    : "xdg-open";
+  const browserArgs = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+  try {
+    spawn(cmd, browserArgs, { stdio: "ignore", detached: true }).unref();
+    return true;
+  } catch { return false; }
+}
+
+async function getTokenViaBrowser() {
+  const url = "https://app.decoy.run/dashboard?tab=settings#s-setup";
+  status("");
+  status(`  ${c.bold}Sign in to Decoy${c.reset}`);
+  status(`  ${c.dim}Free, ~30 seconds. Email-only — no card, no password.${c.reset}`);
+  status("");
+  status(`  ${c.dim}1.${c.reset} Opening ${c.cyan}${url}${c.reset}`);
+  openBrowser(url);
+  status(`  ${c.dim}2.${c.reset} Sign in (or sign up if it's your first time)`);
+  status(`  ${c.dim}3.${c.reset} Copy your token from Setup & Tokens`);
+  status("");
+
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  const token = await new Promise(resolve => {
+    rl.question(`  Paste your token: `, answer => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+
+  if (!token) {
+    status("");
+    status(`  ${c.dim}Cancelled. Re-run when you're ready.${c.reset}`);
+    return null;
+  }
+  if (token.length < 16) {
+    status(`  ${c.red}That doesn't look like a valid token (too short).${c.reset}`);
+    return null;
+  }
+  return token;
 }
 
 // ─── Confirm prompt ───
@@ -280,35 +346,57 @@ async function main() {
     // In --live mode, the warning is shown as part of the confirmation prompt below
   }
 
-  // Pro mode
+  // Team mode
   if (teamMode) {
-    if (tokenArg) {
-      // Validate token against Guard API
-      try {
-        const res = await fetch(`${API_BASE}/billing?token=${encodeURIComponent(tokenArg)}`);
-        const billing = await res.json();
-        const paidPlan = billing.plan === "team" || billing.plan === "pro" || billing.plan === "business";
-        if (paidPlan) {
-          const usage = billing.redteamUsage || {};
-          const remaining = (usage.limit || 20) - (usage.used || 0);
-          const planLabel = billing.plan === "business" ? "Business" : "Team";
-          status(`  ${c.green}✓${c.reset} Guard ${planLabel}  ${c.dim}${remaining} assessments remaining this month${c.reset}\n`);
-        } else {
-          status(`  ${c.yellow}Your account is on the ${billing.plan || "free"} plan.${c.reset}`);
-          status(`  Upgrade to Team for AI-adaptive attacks and exportable reports.\n`);
-          status(`  ${c.cyan}decoy.run/pricing${c.reset}\n`);
-          process.exit(0);
+    // --team is the user explicitly opting into the paid feature. Promote a
+    // stored ~/.decoy/token here (only here) to spare them another paste.
+    if (!tokenArg) {
+      const stored = loadStoredToken();
+      if (stored) tokenArg = stored;
+    }
+    // Still no token → run the browser sign-in flow (TTY) or print a
+    // copy-pasteable hint (non-TTY / JSON / SARIF).
+    if (!tokenArg) {
+      const canPrompt = isTTY && !jsonMode && !sarifMode && !briefMode;
+      if (canPrompt) {
+        status(`  ${c.bold}Advanced AI-powered red team${c.reset} — adaptive attacks, cross-server chains, exportable reports`);
+        const captured = await getTokenViaBrowser();
+        if (!captured) process.exit(1);
+        try {
+          saveStoredToken(captured);
+          status(`  ${c.green}✓${c.reset} ${c.dim}Saved to ~/.decoy/token. Future --team runs won't need --token.${c.reset}\n`);
+        } catch {
+          // Non-fatal: keep going with the in-memory token even if we can't persist.
         }
-      } catch {
-        status(`  ${c.red}Could not verify account.${c.reset} Check your token and try again.\n`);
-        process.exit(1);
+        tokenArg = captured;
+      } else {
+        status(`  ${c.bold}Advanced AI-powered red team${c.reset} — adaptive attacks, cross-server chains, exportable reports\n`);
+        status(`  Available on Decoy Guard paid plans. Sign up and pass your token:\n`);
+        status(`  ${c.cyan}npx decoy-redteam --team --token=YOUR_TOKEN${c.reset}\n`);
+        status(`  Don't have an account? Get started at ${c.underline}decoy.run/pricing${c.reset}\n`);
+        process.exit(0);
       }
-    } else {
-      status(`  ${c.bold}Advanced AI-powered red team${c.reset} — adaptive attacks, cross-server chains, exportable reports\n`);
-      status(`  Available on Decoy Guard paid plans. Sign up and pass your token:\n`);
-      status(`  ${c.cyan}npx decoy-redteam --team --token=YOUR_TOKEN${c.reset}\n`);
-      status(`  Don't have an account? Get started at ${c.underline}decoy.run/pricing${c.reset}\n`);
-      process.exit(0);
+    }
+
+    // Validate the token (whether from flag, env, stored, or pasted) against Guard.
+    try {
+      const res = await fetch(`${API_BASE}/billing?token=${encodeURIComponent(tokenArg)}`);
+      const billing = await res.json();
+      const paidPlan = billing.plan === "team" || billing.plan === "pro" || billing.plan === "business";
+      if (paidPlan) {
+        const usage = billing.redteamUsage || {};
+        const remaining = (usage.limit || 20) - (usage.used || 0);
+        const planLabel = billing.plan === "business" ? "Business" : "Team";
+        status(`  ${c.green}✓${c.reset} Guard ${planLabel}  ${c.dim}${remaining} assessments remaining this month${c.reset}\n`);
+      } else {
+        status(`  ${c.yellow}Your account is on the ${billing.plan || "free"} plan.${c.reset}`);
+        status(`  Upgrade to Team for AI-adaptive attacks and exportable reports.\n`);
+        status(`  ${c.cyan}https://app.decoy.run/dashboard?tab=settings#s-plan${c.reset}\n`);
+        process.exit(0);
+      }
+    } catch {
+      status(`  ${c.red}Could not verify account.${c.reset} Check your token and try again.\n`);
+      process.exit(1);
     }
   }
 

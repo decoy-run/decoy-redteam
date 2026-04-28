@@ -110,6 +110,16 @@ describe("--team billing validation (regression: auth + tier-name drift)", () =>
     assert.strictEqual(billingCall.query.token, "team-token",
       "billing endpoint only reads ?token= — sending Bearer alone causes 'Missing token parameter' rejection");
   });
+
+  it("--team with no token in non-TTY shows the upgrade nudge instead of hanging", async () => {
+    // In subprocess stdio: ["ignore", ...], stdin is not a TTY, so the browser
+    // flow must NOT trigger — we'd hang waiting for paste. Falls back to the
+    // copy-pasteable hint with --token=YOUR_TOKEN.
+    const { stderr, code } = await runCLI(["--team"], { DECOY_TOKEN: "" });
+    assert.ok(stderr.includes("--team --token=YOUR_TOKEN") || stderr.includes("Sign up and pass your token"),
+      `expected non-TTY nudge, got: ${stderr}`);
+    assert.strictEqual(code, 0);
+  });
 });
 
 describe("spinner in non-TTY output (regression: silent-fallback bug)", () => {
