@@ -584,6 +584,9 @@ async function main() {
     status(`\n  ${c.cyan}npx decoy-redteam --live${c.reset}                Execute attacks`);
     status(`  ${c.cyan}npx decoy-redteam --live --target=NAME${c.reset}  Target one server\n`);
 
+    status(`  ${c.dim}★ If decoy-redteam helps, a star helps us prioritize what to build:${c.reset}`);
+    status(`  ${c.dim}  ${c.cyan}https://github.com/decoy-run/decoy-redteam${c.reset}\n`);
+
     closeAll(servers);
     process.exit(0);
   }

@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.14] - 2026-05-06
+
+### Fixed
+- Star ask in 0.1.13 only printed under `--live`. Most first-time users run
+  the default dry-run path, so the prompt never fired. Now also printed at
+  the end of the dry-run summary.
+
 ## [0.1.13] - 2026-05-06
 
 ### Added
