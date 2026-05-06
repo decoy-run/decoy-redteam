@@ -933,6 +933,10 @@ function printSummary(stories, results, servers, coverage) {
       status(`  ${c.dim}decoy.run/pricing${c.reset}             Learn more`);
     }
   }
+
+  status("");
+  status(`  ${c.dim}★ If decoy-redteam helps, a star helps us prioritize what to build:${c.reset}`);
+  status(`  ${c.dim}  ${c.cyan}https://github.com/decoy-run/decoy-redteam${c.reset}`);
   status("");
 }
 
