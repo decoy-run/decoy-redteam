@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] - 2026-05-10
+
+### Added
+- **Anonymous telemetry (default-on).** Free runs now phone home a redacted
+  summary of stories (severity counts, OWASP categories, attack categories —
+  never the raw exploit text or tool arguments) to `/api/telemetry`.
+  Identified by `~/.decoy/install_id`. Previously, free runs sent zero data
+  back; the `--team` upload path was the only telemetry, which silently
+  starved the dataset for the most-used path. Disable with
+  `DECOY_TELEMETRY=0` env var or `--no-telemetry` flag. See
+  https://decoy.run/privacy for what's collected.
+- **`--no-telemetry` flag** for opting out per-run.
+
 ## [0.1.14] - 2026-05-06
 
 ### Fixed

@@ -12,6 +12,7 @@ import { discoverConfigs, probeServers, planAttacks, executeAttacks, buildStorie
 import { calculateCoverage } from "../lib/coverage.mjs";
 import { toSarif, toJson } from "../lib/report.mjs";
 import { extractSource, extractGitHubSource } from "../lib/source.mjs";
+import { send as sendTelemetry, maybePrintFirstRunNotice, summarizeRedteamForTelemetry } from "../lib/telemetry.mjs";
 
 // ─── Version ───
 
@@ -43,6 +44,7 @@ if (flag("pro") && !flag("team")) {
 }
 const targetServer = flagVal("target");
 const categoryFilter = flagVal("category")?.split(",");
+const noTelemetry = flag("no-telemetry");
 const TOKEN_FILE = join(homedir(), ".decoy", "token");
 function loadStoredToken() {
   try {
@@ -759,6 +761,22 @@ async function main() {
     coverage.percentage = Math.round((coverage.executed / coverage.total) * 100);
   }
 
+  // Kick off anonymous telemetry — this is the free-path phone-home that closes
+  // the data-collection gap. Authed --team users still get the existing
+  // uploadResults() call below; both can fire and we'll dedupe at the worker.
+  pendingTelemetry = sendTelemetry({
+    tool: "decoy-redteam",
+    version: VERSION,
+    event: "redteam_complete",
+    payload: summarizeRedteamForTelemetry({
+      stories,
+      coverage,
+      servers: connected,
+      mode: safe ? "safe" : (fullMode ? "full" : "default"),
+    }),
+    disabled: noTelemetry,
+  });
+
   // Upload to Guard (any mode — if token provided, save results)
   if (tokenArg) {
     await uploadResults(stories, coverage, connected, tokenArg);
@@ -781,7 +799,7 @@ async function main() {
     };
     closeAll(servers);
     await new Promise(r => process.stdout.write(JSON.stringify(brief) + "\n", r));
-    exitWithCode(stories);
+    await exitWithCode(stories);
     return;
   }
 
@@ -790,7 +808,7 @@ async function main() {
     const json = JSON.stringify(toJson(stories, coverage, meta), null, 2);
     closeAll(servers);
     await new Promise(r => process.stdout.write(json + "\n", r));
-    exitWithCode(stories);
+    await exitWithCode(stories);
     return;
   }
 
@@ -799,7 +817,7 @@ async function main() {
     const json = JSON.stringify(toSarif(stories, coverage, meta), null, 2);
     closeAll(servers);
     await new Promise(r => process.stdout.write(json + "\n", r));
-    exitWithCode(stories);
+    await exitWithCode(stories);
     return;
   }
 
@@ -807,8 +825,12 @@ async function main() {
   printStories(stories);
   printSummary(stories, results, connected, coverage);
 
+  // First-run telemetry notice — printed once per machine, after the user has
+  // already seen value. Skip in machine-readable output modes.
+  maybePrintFirstRunNotice({ tool: "decoy-redteam", stream: process.stderr });
+
   closeAll(servers);
-  exitWithCode(stories);
+  await exitWithCode(stories);
 }
 
 // ─── Terminal output ───
@@ -943,7 +965,14 @@ function printSummary(stories, results, servers, coverage) {
   status("");
 }
 
-function exitWithCode(stories) {
+// Pending telemetry POST — set when stories are built, awaited at exit so the
+// network request actually leaves before the process tears down.
+let pendingTelemetry = null;
+
+async function exitWithCode(stories) {
+  if (pendingTelemetry) {
+    try { await pendingTelemetry; } catch { /* never fail a run on telemetry */ }
+  }
   const hasCritical = stories.some(s => s.severity === "critical");
   const hasHigh = stories.some(s => s.severity === "high");
   process.exit(hasCritical ? 2 : hasHigh ? 1 : 0);

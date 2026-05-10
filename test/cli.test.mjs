@@ -10,7 +10,9 @@ const CLI = join(__dirname, "..", "bin", "cli.mjs");
 function run(args = [], env = {}) {
   try {
     const result = execFileSync("node", [CLI, ...args], {
-      env: { ...process.env, ...env, NO_COLOR: "1" },
+      // DECOY_TELEMETRY=0 keeps tests from posting to the live worker on every
+      // CLI invocation; specific telemetry behavior is tested separately.
+      env: { DECOY_TELEMETRY: "0", ...process.env, ...env, NO_COLOR: "1" },
       encoding: "utf8",
       timeout: 10_000,
     });

@@ -59,6 +59,9 @@ function runCLI(args, env = {}) {
         // Prevent the CLI from finding real MCP configs on the test host
         HOME: "/tmp/decoy-redteam-test-empty-home",
         APPDATA: "/tmp/decoy-redteam-test-empty-appdata",
+        // Tests run against a local fixture server; default-on telemetry would
+        // hit it too and pollute assertions. Disable in test runs.
+        DECOY_TELEMETRY: "0",
         ...env,
       },
       stdio: ["ignore", "pipe", "pipe"],
