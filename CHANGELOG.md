@@ -10,6 +10,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `--no-telemetry` is now documented in `--help` output. The flag itself
   worked in 0.2.0; only the help text was missing.
 
+## [0.2.3] - 2026-05-10
+
+### Fixed
+- **Telemetry now fires when no MCP configs are found.** Same bug as
+  decoy-scan 0.6.2: the empty-discovery path called `process.exit(0)`
+  directly without going through `exitWithCode`, so any pending
+  telemetry promise was killed mid-flight. Now sends a
+  `redteam_complete` event with `{noConfigs: true}` and exits through
+  `exitWithCode` which awaits the pending POST.
+
 ## [0.2.0] - 2026-05-10
 
 ### Added

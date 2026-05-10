@@ -406,6 +406,18 @@ async function main() {
   // Discover configs
   const configs = discoverConfigs();
   if (configs.length === 0) {
+    // Fire telemetry even on empty discovery so we don't lose the
+    // signal from every first-time `npx decoy-redteam` in a fresh dir.
+    // Previously this path called process.exit(0) directly and any
+    // pending telemetry would have been killed mid-flight; now we
+    // route through exitWithCode which awaits pendingTelemetry first.
+    pendingTelemetry = sendTelemetry({
+      tool: "decoy-redteam",
+      version: VERSION,
+      event: "redteam_complete",
+      payload: { noConfigs: true, hostsChecked: 7 },
+      disabled: noTelemetry,
+    });
     if (jsonMode) {
       const empty = { timestamp: new Date().toISOString(), version: VERSION, stories: [], coverage: { executed: 0, total: 0, percentage: 100 }, summary: { critical: 0, high: 0, medium: 0, low: 0, total: 0 } };
       await new Promise(r => process.stdout.write(JSON.stringify(empty, null, 2) + "\n", r));
@@ -414,8 +426,10 @@ async function main() {
       await new Promise(r => process.stdout.write(JSON.stringify(empty, null, 2) + "\n", r));
     } else {
       status(`  No MCP configurations found.\n  Checked: Claude Desktop, Cursor, Windsurf, VS Code, Claude Code, Zed, Cline\n\n  Hint: Create .mcp.json in your project or configure an MCP client. See https://decoy.run/docs`);
+      maybePrintFirstRunNotice({ tool: "decoy-redteam", stream: process.stderr });
     }
-    process.exit(0);
+    await exitWithCode([]);
+    return;
   }
 
   const hosts = configs.map(cfg => cfg.host);
