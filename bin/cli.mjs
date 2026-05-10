@@ -12,7 +12,15 @@ import { discoverConfigs, probeServers, planAttacks, executeAttacks, buildStorie
 import { calculateCoverage } from "../lib/coverage.mjs";
 import { toSarif, toJson } from "../lib/report.mjs";
 import { extractSource, extractGitHubSource } from "../lib/source.mjs";
-import { send as sendTelemetry, maybePrintFirstRunNotice, summarizeRedteamForTelemetry } from "../lib/telemetry.mjs";
+import {
+  sendEvent as sendTelemetryEvent,
+  flushQueue as flushTelemetryQueue,
+  newRunId,
+  inferHostFromConfigs,
+  maybePrintFirstRunNotice,
+  maybePrintClaimURL,
+  summarizeRedteamForTelemetry,
+} from "../lib/telemetry.mjs";
 
 // ─── Version ───
 
@@ -331,6 +339,11 @@ async function uploadResults(stories, coverage, servers, token) {
 // ─── Main ───
 
 async function main() {
+  // One run_id for the whole invocation. Fire cli.invoked first thing
+  // so the funnel denominator counts even bounced/crashed runs.
+  const runId = newRunId();
+  flushTelemetryQueue().catch(() => {});
+
   // SIGINT handler — clean up spawned processes
   const servers = [];
   const cleanup = () => { closeAll(servers); process.exit(130); };
@@ -338,6 +351,25 @@ async function main() {
   process.on("SIGTERM", cleanup);
 
   status(`\n  ${c.bold}decoy-redteam${c.reset} ${c.dim}v${VERSION}${c.reset}\n`);
+
+  // cli.invoked — earliest event. Captures who started us, in what
+  // mode, with what token state. Pre-discovery so even bouncing users
+  // produce a signal.
+  sendTelemetryEvent({
+    tool: "decoy-redteam",
+    version: VERSION,
+    event: "cli.invoked",
+    runId,
+    payload: {
+      mode: jsonMode ? "json" : sarifMode ? "sarif" : briefMode ? "brief" : "human",
+      live: !dryRun,
+      teamMode,
+      fullMode,
+      hasToken: !!tokenArg,
+      hasRepo: !!repoArg,
+    },
+    disabled: noTelemetry,
+  }).catch(() => {});
 
   // Authorization warning — required for a red team tool
   if (process.env.DECOY_REDTEAM_AUTHORIZED !== "1") {
@@ -405,16 +437,33 @@ async function main() {
 
   // Discover configs
   const configs = discoverConfigs();
+  const host = inferHostFromConfigs(configs);
+
+  // scan.discovery analog for redteam — what hosts/servers exist.
+  sendTelemetryEvent({
+    tool: "decoy-redteam",
+    version: VERSION,
+    event: "redteam.plan",
+    runId,
+    host,
+    payload: {
+      hostCount: configs.length,
+      serverCount: new Set(configs.flatMap(c => Object.keys(c.servers || {}))).size,
+      hosts: configs.map(c => c.host).slice(0, 10),
+    },
+    disabled: noTelemetry,
+  }).catch(() => {});
+
   if (configs.length === 0) {
-    // Fire telemetry even on empty discovery so we don't lose the
-    // signal from every first-time `npx decoy-redteam` in a fresh dir.
-    // Previously this path called process.exit(0) directly and any
-    // pending telemetry would have been killed mid-flight; now we
-    // route through exitWithCode which awaits pendingTelemetry first.
-    pendingTelemetry = sendTelemetry({
+    // Fire telemetry even on empty discovery — same fix as scan's
+    // empty-config path. Routed through exitWithCode so pendingTelemetry
+    // is awaited before process.exit.
+    pendingTelemetry = sendTelemetryEvent({
       tool: "decoy-redteam",
       version: VERSION,
-      event: "redteam_complete",
+      event: "redteam.complete",
+      runId,
+      host,
       payload: { noConfigs: true, hostsChecked: 7 },
       disabled: noTelemetry,
     });
@@ -427,6 +476,7 @@ async function main() {
     } else {
       status(`  No MCP configurations found.\n  Checked: Claude Desktop, Cursor, Windsurf, VS Code, Claude Code, Zed, Cline\n\n  Hint: Create .mcp.json in your project or configure an MCP client. See https://decoy.run/docs`);
       maybePrintFirstRunNotice({ tool: "decoy-redteam", stream: process.stderr });
+      maybePrintClaimURL({ tool: "decoy-redteam", stream: process.stderr });
     }
     await exitWithCode([]);
     return;
@@ -776,13 +826,15 @@ async function main() {
     coverage.percentage = Math.round((coverage.executed / coverage.total) * 100);
   }
 
-  // Kick off anonymous telemetry — this is the free-path phone-home that closes
-  // the data-collection gap. Authed --team users still get the existing
-  // uploadResults() call below; both can fire and we'll dedupe at the worker.
-  pendingTelemetry = sendTelemetry({
+  // Kick off the redteam.complete event alongside output rendering.
+  // Awaited via exitWithCode. Same run_id ties this to the cli.invoked
+  // and redteam.plan events earlier in this run.
+  pendingTelemetry = sendTelemetryEvent({
     tool: "decoy-redteam",
     version: VERSION,
-    event: "redteam_complete",
+    event: "redteam.complete",
+    runId,
+    host,
     payload: summarizeRedteamForTelemetry({
       stories,
       coverage,
@@ -843,6 +895,7 @@ async function main() {
   // First-run telemetry notice — printed once per machine, after the user has
   // already seen value. Skip in machine-readable output modes.
   maybePrintFirstRunNotice({ tool: "decoy-redteam", stream: process.stderr });
+  maybePrintClaimURL({ tool: "decoy-redteam", stream: process.stderr });
 
   closeAll(servers);
   await exitWithCode(stories);

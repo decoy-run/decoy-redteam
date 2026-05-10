@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `--no-telemetry` is now documented in `--help` output. The flag itself
   worked in 0.2.0; only the help text was missing.
 
+## [0.3.0] - 2026-05-10
+
+### Added
+- **v2 telemetry envelope.** Same envelope upgrade as decoy-scan
+  0.7.0: schema_version, event_id (dedup), run_id, env block (node,
+  platform, arch, ci, host, locale). Funnel cohorting unblocked.
+- **New events:** `cli.invoked`, `redteam.plan` (discovery analog).
+- **Retry + persistent queue + batched drain.** Same durability
+  story as decoy-scan 0.7.0.
+- **First-run dashboard link** printed at end of human-mode runs.
+
 ## [0.2.3] - 2026-05-10
 
 ### Fixed
