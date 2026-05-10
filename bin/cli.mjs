@@ -226,6 +226,7 @@ ${c.bold}Output${c.reset}
   --brief          Minimal JSON summary (for agents with limited context)
   --quiet, -q      Suppress status messages
   --no-color       Disable color output
+  --no-telemetry   Disable anonymized telemetry (or set DECOY_TELEMETRY=0)
 
 ${c.bold}Advanced AI-powered red team${c.reset} (Team / Business plans)
   --team               AI-adaptive attacks + source code analysis

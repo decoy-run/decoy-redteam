@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.1] - 2026-05-10
+
+### Fixed
+- `--no-telemetry` is now documented in `--help` output. The flag itself
+  worked in 0.2.0; only the help text was missing.
+
 ## [0.2.0] - 2026-05-10
 
 ### Added
