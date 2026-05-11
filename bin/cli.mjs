@@ -342,7 +342,7 @@ async function main() {
   // One run_id for the whole invocation. Fire cli.invoked first thing
   // so the funnel denominator counts even bounced/crashed runs.
   const runId = newRunId();
-  flushTelemetryQueue().catch(() => {});
+  trackTelemetry(flushTelemetryQueue());
 
   // SIGINT handler — clean up spawned processes
   const servers = [];
@@ -355,7 +355,7 @@ async function main() {
   // cli.invoked — earliest event. Captures who started us, in what
   // mode, with what token state. Pre-discovery so even bouncing users
   // produce a signal.
-  sendTelemetryEvent({
+  trackTelemetry(sendTelemetryEvent({
     tool: "decoy-redteam",
     version: VERSION,
     event: "cli.invoked",
@@ -369,7 +369,7 @@ async function main() {
       hasRepo: !!repoArg,
     },
     disabled: noTelemetry,
-  }).catch(() => {});
+  }));
 
   // Authorization warning — required for a red team tool
   if (process.env.DECOY_REDTEAM_AUTHORIZED !== "1") {
@@ -440,7 +440,7 @@ async function main() {
   const host = inferHostFromConfigs(configs);
 
   // scan.discovery analog for redteam — what hosts/servers exist.
-  sendTelemetryEvent({
+  trackTelemetry(sendTelemetryEvent({
     tool: "decoy-redteam",
     version: VERSION,
     event: "redteam.plan",
@@ -452,13 +452,12 @@ async function main() {
       hosts: configs.map(c => c.host).slice(0, 10),
     },
     disabled: noTelemetry,
-  }).catch(() => {});
+  }));
 
   if (configs.length === 0) {
     // Fire telemetry even on empty discovery — same fix as scan's
-    // empty-config path. Routed through exitWithCode so pendingTelemetry
-    // is awaited before process.exit.
-    pendingTelemetry = sendTelemetryEvent({
+    // empty-config path. exitWithCode awaits all tracked promises.
+    trackTelemetry(sendTelemetryEvent({
       tool: "decoy-redteam",
       version: VERSION,
       event: "redteam.complete",
@@ -466,7 +465,7 @@ async function main() {
       host,
       payload: { noConfigs: true, hostsChecked: 7 },
       disabled: noTelemetry,
-    });
+    }));
     if (jsonMode) {
       const empty = { timestamp: new Date().toISOString(), version: VERSION, stories: [], coverage: { executed: 0, total: 0, percentage: 100 }, summary: { critical: 0, high: 0, medium: 0, low: 0, total: 0 } };
       await new Promise(r => process.stdout.write(JSON.stringify(empty, null, 2) + "\n", r));
@@ -827,9 +826,8 @@ async function main() {
   }
 
   // Kick off the redteam.complete event alongside output rendering.
-  // Awaited via exitWithCode. Same run_id ties this to the cli.invoked
-  // and redteam.plan events earlier in this run.
-  pendingTelemetry = sendTelemetryEvent({
+  // exitWithCode awaits the whole tracked telemetry set before exit.
+  trackTelemetry(sendTelemetryEvent({
     tool: "decoy-redteam",
     version: VERSION,
     event: "redteam.complete",
@@ -842,7 +840,7 @@ async function main() {
       mode: safe ? "safe" : (fullMode ? "full" : "default"),
     }),
     disabled: noTelemetry,
-  });
+  }));
 
   // Upload to Guard (any mode — if token provided, save results)
   if (tokenArg) {
@@ -1033,13 +1031,21 @@ function printSummary(stories, results, servers, coverage) {
   status("");
 }
 
-// Pending telemetry POST — set when stories are built, awaited at exit so the
-// network request actually leaves before the process tears down.
-let pendingTelemetry = null;
+// All telemetry promises are tracked here so exitWithCode awaits them
+// all before process.exit — without this, the fire-and-forget
+// cli.invoked/redteam.plan calls and the queue-drain POST get killed
+// mid-flight and never finish. Set as a const array; each tracked
+// promise wraps its own .catch so awaitall never rejects.
+const pendingTelemetry = [];
+function trackTelemetry(p) {
+  if (p && typeof p.then === "function") pendingTelemetry.push(p.catch(() => {}));
+  return p;
+}
 
 async function exitWithCode(stories) {
-  if (pendingTelemetry) {
-    try { await pendingTelemetry; } catch { /* never fail a run on telemetry */ }
+  if (pendingTelemetry.length > 0) {
+    try { await Promise.allSettled(pendingTelemetry); } catch { /* never fail a run on telemetry */ }
+    pendingTelemetry.length = 0;
   }
   const hasCritical = stories.some(s => s.severity === "critical");
   const hasHigh = stories.some(s => s.severity === "high");
