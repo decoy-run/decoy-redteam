@@ -110,7 +110,7 @@ Free `decoy-redteam` runs 54 deterministic attack patterns. The paid tiers on [D
 - **Encoding bypass suite** — 25+ encoding variants per injection vector
 - **Cross-server chain discovery** — finds attack paths across multiple servers
 - **Exportable HTML reports** — branded, print-ready security assessments
-- **Continuous red teaming** — scheduled runs with drift detection
+- **Continuous red teaming** — scheduled runs against your live MCPs
 
 Run with `--team --token=YOUR_TOKEN`.
 

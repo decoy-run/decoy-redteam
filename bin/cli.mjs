@@ -1018,7 +1018,7 @@ function printSummary(stories, results, servers, coverage) {
         status(`  ${c.dim}·${c.reset} Cross-server chains across ${coverage.serverCount} servers`);
       }
       status(`  ${c.dim}·${c.reset} Exportable HTML report for security reviews`);
-      status(`  ${c.dim}·${c.reset} Continuous red teaming with drift detection`);
+      status(`  ${c.dim}·${c.reset} Continuous red teaming on a schedule`);
       status("");
       status(`  ${c.cyan}npx decoy-redteam --team${c.reset}      Get started`);
       status(`  ${c.dim}decoy.run/pricing${c.reset}             Learn more`);
