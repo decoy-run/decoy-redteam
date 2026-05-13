@@ -1,6 +1,6 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { planAttacks, executeAttacks, buildStories, closeAll } from "../lib/engine.mjs";
+import { planAttacks, executeAttacks, buildStories, captureBaselines, closeAll } from "../lib/engine.mjs";
 import { McpConnection } from "../lib/transport.mjs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -249,5 +249,208 @@ describe("full pipeline against mock server", () => {
       assert.ok(story.severity, "Story must have a severity");
       assert.ok(story.evidence?.length > 0, `Story ${story.id} must have evidence`);
     }
+  });
+});
+
+// ─── summarizeResponse: tested via buildStories output ────────────────────
+// summarizeResponse is private; we test it through the observable side-effect
+// (story.evidence[i].response shape).
+
+describe("MCP envelope unwrap in evidence", () => {
+  function story(result) {
+    const results = [{
+      server: "s", tool: "t",
+      attack: { id: "X", severity: "high", category: "c", owasp: "ASI02", ascf: "A", story: { title: "T", impact: "I", remediation: "R" } },
+      outcome: "vulnerable",
+      response: { result, error: null, elapsed: 1 },
+      payload: "p",
+    }];
+    return buildStories(results)[0];
+  }
+
+  it("unwraps MCP {content:[{type:'text',text:'…'}]} to the inner text", () => {
+    const s = story({ content: [{ type: "text", text: "uid=0(root) gid=0(root)" }] });
+    assert.strictEqual(s.evidence[0].response, "uid=0(root) gid=0(root)");
+  });
+
+  it("joins multiple content[] entries with newlines", () => {
+    const s = story({ content: [
+      { type: "text", text: "line one" },
+      { type: "text", text: "line two" },
+    ] });
+    assert.strictEqual(s.evidence[0].response, "line one\nline two");
+  });
+
+  it("ignores non-text content[] entries", () => {
+    const s = story({ content: [
+      { type: "image", data: "base64xyz" },
+      { type: "text", text: "the actual leak" },
+    ] });
+    assert.strictEqual(s.evidence[0].response, "the actual leak");
+  });
+
+  it("falls back to JSON.stringify for non-MCP shapes", () => {
+    const s = story({ rows: [{ id: 1 }] });
+    assert.ok(s.evidence[0].response.includes("rows"));
+    assert.ok(s.evidence[0].response.includes("id"));
+  });
+
+  it("truncates responses longer than 300 chars with ellipsis", () => {
+    const long = "X".repeat(500);
+    const s = story({ content: [{ type: "text", text: long }] });
+    assert.ok(s.evidence[0].response.length <= 301 + 1, `Expected ≤302 chars, got ${s.evidence[0].response.length}`);
+    assert.ok(s.evidence[0].response.endsWith("…"));
+  });
+
+  it("short responses are returned unchanged", () => {
+    const s = story({ content: [{ type: "text", text: "short" }] });
+    assert.strictEqual(s.evidence[0].response, "short");
+  });
+});
+
+// ─── captureBaselines: synthetic conn, no real MCP needed ──────────────────
+
+describe("captureBaselines", () => {
+  function fakeConn(handler) {
+    return {
+      connected: true,
+      async callTool(name, args) {
+        return handler(name, args);
+      },
+      close() {},
+    };
+  }
+
+  it("calls each tool once with schema-derived benign args", async () => {
+    const calls = [];
+    const conn = fakeConn(async (name, args) => {
+      calls.push({ name, args });
+      return { result: { content: [{ type: "text", text: "ok" }] }, error: null, elapsed: 7 };
+    });
+    const servers = [{
+      name: "s", conn, error: null,
+      tools: [
+        { name: "t_str", inputSchema: { properties: { q: { type: "string" } } } },
+        { name: "t_num", inputSchema: { properties: { n: { type: "integer" } } } },
+        { name: "t_bool", inputSchema: { properties: { flag: { type: "boolean" } } } },
+        { name: "t_arr", inputSchema: { properties: { items: { type: "array" } } } },
+        { name: "t_obj", inputSchema: { properties: { meta: { type: "object" } } } },
+        { name: "t_enum", inputSchema: { properties: { mode: { type: "string", enum: ["read", "write"] } } } },
+      ],
+    }];
+    await captureBaselines(servers);
+    assert.strictEqual(calls.length, 6, `Expected 6 baseline calls, got ${calls.length}`);
+    assert.strictEqual(calls[0].args.q, "decoy-baseline-probe");
+    assert.strictEqual(calls[1].args.n, 1);
+    assert.strictEqual(calls[2].args.flag, false);
+    assert.deepStrictEqual(calls[3].args.items, []);
+    assert.deepStrictEqual(calls[4].args.meta, {});
+    assert.strictEqual(calls[5].args.mode, "read", "enum baseline uses first enum value");
+  });
+
+  it("populates server.baselines map with elapsed, resultText, errorText, errored", async () => {
+    const conn = fakeConn(async () => ({
+      result: { content: [{ type: "text", text: "hello" }] },
+      error: null,
+      elapsed: 42,
+    }));
+    const servers = [{
+      name: "s", conn, error: null,
+      tools: [{ name: "t", inputSchema: { properties: { x: { type: "string" } } } }],
+    }];
+    await captureBaselines(servers);
+    const b = servers[0].baselines.get("t");
+    assert.ok(b, "baseline entry must exist");
+    assert.strictEqual(b.elapsed, 42);
+    assert.ok(b.resultText.includes("hello"));
+    assert.strictEqual(b.errored, false);
+  });
+
+  it("marks baseline.errored=true when callTool throws", async () => {
+    const conn = fakeConn(async () => { throw new Error("boom"); });
+    const servers = [{
+      name: "s", conn, error: null,
+      tools: [{ name: "t", inputSchema: { properties: { x: { type: "string" } } } }],
+    }];
+    await captureBaselines(servers);
+    const b = servers[0].baselines.get("t");
+    assert.ok(b);
+    assert.strictEqual(b.errored, true);
+  });
+
+  it("marks baseline.errored=true when MCP returns isError:true", async () => {
+    const conn = fakeConn(async () => ({
+      result: { isError: true, content: [{ type: "text", text: "rejected" }] },
+      error: null,
+      elapsed: 3,
+    }));
+    const servers = [{
+      name: "s", conn, error: null,
+      tools: [{ name: "t", inputSchema: { properties: { x: { type: "string" } } } }],
+    }];
+    await captureBaselines(servers);
+    assert.strictEqual(servers[0].baselines.get("t").errored, true);
+  });
+
+  it("skips browser-automation tools (same gating as planAttacks)", async () => {
+    const calls = [];
+    const conn = fakeConn(async (name) => { calls.push(name); return { result: {}, error: null, elapsed: 1 }; });
+    const servers = [{
+      name: "playwright", conn, error: null,
+      tools: [
+        { name: "browser_click", inputSchema: { properties: { selector: { type: "string" } } } },
+        { name: "navigate", inputSchema: { properties: { url: { type: "string" } } } },
+        { name: "list_pages", inputSchema: { properties: {} } },
+      ],
+    }];
+    await captureBaselines(servers);
+    assert.deepStrictEqual(calls, ["list_pages"], "Only non-side-effect tools get baseline calls");
+  });
+
+  it("skips servers with error or null conn", async () => {
+    const servers = [
+      { name: "broken", conn: null, error: "Connection refused", tools: [] },
+    ];
+    // Must not throw.
+    await captureBaselines(servers);
+    assert.strictEqual(servers[0].baselines, undefined, "no baselines map for unreachable servers");
+  });
+
+  it("times out a hanging baseline call rather than stalling the phase", async () => {
+    let resolveHang;
+    const hangPromise = new Promise(r => { resolveHang = r; });
+    const conn = {
+      connected: true,
+      callTool: () => hangPromise,
+      close() {},
+    };
+    const servers = [{
+      name: "s", conn, error: null,
+      tools: [{ name: "slow_tool", inputSchema: { properties: { x: { type: "string" } } } }],
+    }];
+    const t0 = Date.now();
+    await captureBaselines(servers, { timeoutMs: 50 });
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed < 500, `Should bail in <500ms (timeoutMs=50), took ${elapsed}ms`);
+    const b = servers[0].baselines.get("slow_tool");
+    assert.strictEqual(b.errored, true);
+    assert.strictEqual(b.errorText, "baseline timeout");
+    resolveHang({ result: {}, error: null, elapsed: 0 }); // let the dangling promise resolve cleanly
+  });
+
+  it("reports progress via onProgress callback", async () => {
+    const conn = fakeConn(async () => ({ result: {}, error: null, elapsed: 1 }));
+    const servers = [{
+      name: "s", conn, error: null,
+      tools: [
+        { name: "a", inputSchema: { properties: {} } },
+        { name: "b", inputSchema: { properties: {} } },
+        { name: "c", inputSchema: { properties: {} } },
+      ],
+    }];
+    const progress = [];
+    await captureBaselines(servers, { onProgress: p => progress.push(p) });
+    assert.strictEqual(progress.length, 3);
+    assert.deepStrictEqual(progress[2], { completed: 3, total: 3 });
   });
 });

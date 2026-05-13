@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
-import { discoverConfigs, probeServers, planAttacks, executeAttacks, buildStories, closeAll, isInteractiveSideEffectTool } from "../lib/engine.mjs";
+import { discoverConfigs, probeServers, captureBaselines, planAttacks, executeAttacks, buildStories, closeAll, isInteractiveSideEffectTool } from "../lib/engine.mjs";
 import { calculateCoverage } from "../lib/coverage.mjs";
 import { toSarif, toJson } from "../lib/report.mjs";
 import { extractSource, extractGitHubSource } from "../lib/source.mjs";
@@ -689,6 +689,31 @@ async function main() {
   }
   status("");
 
+  // Baseline capture — one benign call per tool before any attack. Findings
+  // whose indicators also match the baseline get suppressed (they were already
+  // in the tool's normal output, not attack-specific). Timing thresholds
+  // adapt to the tool's natural latency to dampen cold-start FPs.
+  const baselineCount = connected.reduce((n, s) => n + s.tools.filter(t => !isInteractiveSideEffectTool(t)).length, 0);
+  if (baselineCount > 0) {
+    const spB = spinner(`Calibrating baselines (${baselineCount} tools)…`);
+    let lastBaseUpdate = 0;
+    const bStart = performance.now();
+    await captureBaselines(connected, {
+      onProgress: ({ completed, total }) => {
+        if (!isTTY || quietMode || jsonMode || sarifMode) return;
+        const now = Date.now();
+        if (now - lastBaseUpdate > 150) {
+          const pct = Math.round((completed / total) * 100);
+          process.stderr.write(`\r\x1b[K  ${c.dim}${SPINNER_FRAMES[0]} Calibrating baselines · ${pct}%${c.reset}`);
+          lastBaseUpdate = now;
+        }
+      },
+    });
+    const captured = connected.reduce((n, s) => n + (s.baselines?.size || 0), 0);
+    const bElapsed = ((performance.now() - bStart) / 1000).toFixed(1);
+    spB.stop(`  ${c.dim}${captured}/${baselineCount} baselines captured in ${bElapsed}s${c.reset}`);
+  }
+
   // Merge Pro attacks into plan
   const fullPlan = [...plan, ...proPlan];
 
@@ -918,9 +943,9 @@ function printStories(stories) {
     const color = SEV_COLOR[story.severity] || "";
     const icon = SEV_ICON[story.severity] || " ";
     const sev = story.severity.toUpperCase();
-    const tasteLabel = story.isTaste ? `  ${c.cyan}[Pro]${c.reset}` : "";
+    const owaspTag = story.owasp ? `  ${c.dim}[${story.owasp}]${c.reset}` : "";
 
-    status(`  ${color}${icon} ${sev}${c.reset}  ${c.bold}${story.title}${c.reset}${tasteLabel}`);
+    status(`  ${color}${icon} ${sev}${c.reset}  ${c.bold}${story.title}${c.reset}${owaspTag}`);
 
     // Show the best evidence line — the one that proves exploitation
     const ev = story.evidence[0];
@@ -928,14 +953,25 @@ function printStories(stories) {
       const payload = typeof ev.payload === "string" ? ev.payload : JSON.stringify(ev.payload);
       const short = payload.length > 60 ? payload.slice(0, 60) + "…" : payload;
       status(`    ${c.dim}${story.server} →${c.reset} ${story.tool || "protocol"}(${short})`);
+
+      // Response evidence — what came back from the server, the proof. This is
+      // the most-screenshottable part of the output. Skip for the noError-only
+      // "accepted" case (no exfil evidence to display).
+      if (ev.response && ev.outcome === "vulnerable") {
+        const lines = String(ev.response).split("\n").slice(0, 4);
+        const maxLen = 64;
+        const clipped = lines.map(l => l.length > maxLen ? l.slice(0, maxLen) + "…" : l);
+        if (clipped.length > 0 && clipped[0].trim() !== "") {
+          status(`    ${c.dim}┌─ Response ${"─".repeat(maxLen - 9)}${c.reset}`);
+          for (const l of clipped) {
+            status(`    ${c.dim}│${c.reset} ${l}`);
+          }
+          status(`    ${c.dim}└${"─".repeat(maxLen + 1)}${c.reset}`);
+        }
+      }
     }
 
     status(`    ${c.dim}→${c.reset} ${story.remediation}`);
-
-    if (story.isTaste) {
-      status(`    ${c.cyan}↳ Advanced AI-powered red team tests 25+ encoding variants per vector${c.reset}`);
-    }
-
     status("");
   }
 

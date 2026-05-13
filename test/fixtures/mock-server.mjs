@@ -211,6 +211,13 @@ rl.on("line", (line) => {
     return;
   }
 
+  // Test hook: deliberately return a JSON-RPC error for "_test_error" method.
+  // Used by sendRaw tests to verify _mcpError unwrap.
+  if (msg.method === "_test_error") {
+    respondError(msg.id, -32601, "Method not found");
+    return;
+  }
+
   // Accept anything else with invalid JSON-RPC version too
   if (msg.id) {
     respond(msg.id, { status: "ok" });
@@ -219,5 +226,10 @@ rl.on("line", (line) => {
 
 function respond(id, result) {
   const msg = JSON.stringify({ jsonrpc: "2.0", id, result });
+  process.stdout.write(msg + "\n");
+}
+
+function respondError(id, code, message) {
+  const msg = JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } });
   process.stdout.write(msg + "\n");
 }

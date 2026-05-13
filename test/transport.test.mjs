@@ -56,6 +56,19 @@ describe("sendRaw", () => {
     assert.strictEqual(result.error, null);
   });
 
+  it("unwraps JSON-RPC error responses into the error field (sendRaw)", async () => {
+    // Regression: pre-fix, sendRaw returned {result: {_mcpError, error: {...}}, error: null}
+    // for JSON-RPC error responses, which made evaluateOutcome treat the call
+    // as a successful "no error" outcome and fire a false-low for noError-only
+    // protocol attacks. Post-fix: error field is populated, result is null.
+    const msg = JSON.stringify({ jsonrpc: "2.0", id: 9123, method: "_test_error", params: {} });
+    const result = await conn.sendRaw(msg, { timeout: 1000 });
+    assert.strictEqual(result.result, null, "result must be null for error responses");
+    assert.ok(result.error, "error must be populated");
+    assert.strictEqual(result.error.code, -32601);
+    assert.strictEqual(result.error.message, "Method not found");
+  });
+
   it("timeout resolves with error object, not null", async () => {
     // Craft a message the mock server won't respond to — use an id but
     // write invalid JSON so the mock ignores it but our code still waits

@@ -1,6 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { evaluateOutcome, buildStories } from "../lib/engine.mjs";
+import { ATTACKS } from "../lib/attacks.mjs";
+
+function attackById(id) {
+  const a = ATTACKS.find(x => x.id === id);
+  if (!a) throw new Error(`No attack ${id}`);
+  return a;
+}
 
 describe("evaluateOutcome", () => {
   const baseAttack = {
@@ -115,3 +122,245 @@ describe("buildStories confidence and severity", () => {
     assert.strictEqual(stories[0].severity, "high");
   });
 });
+
+// ─── False-positive regression suite ────────────────────────────────────
+//
+// These tests pin the FP-rate fix in place. Each case was a known-bad
+// signal pre-rewrite (a real tool response or error that triggered a
+// false critical/high finding). Tightened indicators + payload-echo guard
+// should make all of them return blocked/accepted instead.
+
+describe("FP regression — broad indicators removed", () => {
+  it("SQL tautology (INJ-001): {rows:[{result:'ok'}]} response does NOT fire critical", () => {
+    const attack = attackById("INJ-001");
+    const response = { result: { rows: [{ result: "ok" }], rowCount: 1 }, error: null, elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, "' OR 1=1 --");
+    // Previously fired "vulnerable" via /rows?/i + /result/i. Now only the
+    // noError path can fire, which buildStories caps to low/low.
+    assert.strictEqual(outcome, "accepted", "Tautology with no schema exfil should be 'accepted', not 'vulnerable'");
+  });
+
+  it("Path traversal (INJ-008): 'permission denied' error does NOT fire", () => {
+    const attack = attackById("INJ-008");
+    // Common case: tool rejects payload but error contains the word "secret"
+    const response = { result: null, error: "Access denied: secret resource not allowed", elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, "../../.env");
+    assert.strictEqual(outcome, "blocked", "Error containing 'secret' must not fire path-traversal");
+  });
+
+  it("Path traversal (INJ-008): friendly 'no such file' error does NOT fire", () => {
+    const attack = attackById("INJ-008");
+    const response = { result: null, error: "File not found: ../../.env (password protection enabled)", elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, "../../.env");
+    assert.strictEqual(outcome, "blocked");
+  });
+
+  it("Path traversal (INJ-008): actual /etc/passwd content DOES fire", () => {
+    const attack = attackById("INJ-008");
+    const response = { result: "root:x:0:0:root:/root:/bin/bash\nbin:x:1:1:bin:/bin:/sbin/nologin", error: null, elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, "../../../etc/passwd");
+    assert.strictEqual(outcome, "vulnerable");
+  });
+
+  it("Path traversal (INJ-008): actual .env content DOES fire", () => {
+    const attack = attackById("INJ-008");
+    const response = { result: "DATABASE_URL=postgres://admin:s3cret@host/db\nAPI_TOKEN=tok_abc123", error: null, elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, "../../.env");
+    assert.strictEqual(outcome, "vulnerable");
+  });
+
+  it("SSRF localhost (INJ-011): generic '200 OK / html' response does NOT fire", () => {
+    const attack = attackById("INJ-011");
+    const response = { result: "<html><body>200 OK</body></html>", error: null, elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, "http://127.0.0.1:80");
+    // Pre-fix matched /html/ + /json/ + /200/. Post-fix only INTERNAL_SERVICE_PAGE
+    // anchors fire, and a generic body doesn't qualify.
+    assert.strictEqual(outcome, "accepted");
+  });
+
+  it("SSRF localhost (INJ-011): internal admin panel body DOES fire", () => {
+    const attack = attackById("INJ-011");
+    const response = { result: "<html><body>Internal admin panel</body></html>", error: null, elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, "http://127.0.0.1:8080");
+    assert.strictEqual(outcome, "vulnerable");
+  });
+
+  it("Command injection (INJ-005): tool echoes 'whoami' in error does NOT fire", () => {
+    const attack = attackById("INJ-005");
+    // Pre-fix: /whoami/i + /root/i would match the echoed payload itself.
+    const response = { result: null, error: "Unknown command: echo test; whoami (rejected by allowlist)", elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, "echo test; whoami");
+    assert.strictEqual(outcome, "blocked");
+  });
+
+  it("Command injection (INJ-005): actual id output DOES fire", () => {
+    const attack = attackById("INJ-005");
+    const response = { result: "test\nuid=0(root) gid=0(root) groups=0(root)", error: null, elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, "echo test; id");
+    assert.strictEqual(outcome, "vulnerable");
+  });
+
+  it("Credential exposure (CRD-002): tool error mentioning 'password' does NOT fire critical", () => {
+    const attack = attackById("CRD-002");
+    const response = { result: null, error: "Could not open .env: password-protected vault is locked", elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, ".env");
+    assert.strictEqual(outcome, "blocked");
+  });
+
+  it("Credential exposure (CRD-002): actual env content DOES fire", () => {
+    const attack = attackById("CRD-002");
+    const response = { result: "STRIPE_SECRET_KEY=sk_live_aaaaaaaaaaaaaaaaaaaa\nDATABASE_URL=postgres://u:p@h/d", error: null, elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, ".env");
+    assert.strictEqual(outcome, "vulnerable");
+  });
+
+  it("Error oracle (CRD-003): a 'version mismatch' error does NOT fire", () => {
+    const attack = attackById("CRD-003");
+    // Pre-fix: bare /version/i matched. Post-fix needs structural stack
+    // trace shape.
+    const response = { result: null, error: "Schema version mismatch (expected 3, got 2)", elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, { path: "/nope" });
+    assert.strictEqual(outcome, "blocked");
+  });
+
+  it("Error oracle (CRD-003): a real stack trace DOES fire", () => {
+    const attack = attackById("CRD-003");
+    const response = { result: null, error: "TypeError: bad arg\n    at handle (/app/node_modules/foo/index.js:42:13)\n    at next (internal/process/task_queues.js:95:5)", elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, { path: "/nope" });
+    assert.strictEqual(outcome, "vulnerable");
+  });
+});
+
+describe("FP regression — baseline suppression", () => {
+  // Baseline is a benign call against the tool captured before attacks. If
+  // the same indicator already matches the baseline, the attack response
+  // wasn't attack-specific behavior — it's just what the tool normally
+  // returns. Suppress.
+
+  it("indicator match present in baseline.resultText is suppressed", () => {
+    const attack = { indicators: { successPatterns: [/-----BEGIN PRIVATE KEY-----/] } };
+    const baseline = {
+      resultText: "Example response: -----BEGIN PRIVATE KEY-----\\nMIIEvQ... (sample)",
+      errorText: "",
+      elapsed: 5,
+    };
+    const response = { result: "-----BEGIN PRIVATE KEY-----\nMIIEvQ...", error: null, elapsed: 10 };
+    const outcome = evaluateOutcome(attack, response, "../../.ssh/id_rsa", baseline);
+    assert.strictEqual(outcome, "blocked", "anchor already in baseline must not fire");
+  });
+
+  it("indicator match NOT in baseline still fires when present in attack response", () => {
+    const attack = { indicators: { successPatterns: [/-----BEGIN PRIVATE KEY-----/] } };
+    const baseline = { resultText: "normal response, no key", errorText: "", elapsed: 5 };
+    const response = { result: "-----BEGIN PRIVATE KEY-----\nMIIEvQ...", error: null, elapsed: 10 };
+    const outcome = evaluateOutcome(attack, response, "../../.ssh/id_rsa", baseline);
+    assert.strictEqual(outcome, "vulnerable");
+  });
+
+  it("timing threshold adapts to baseline elapsed (cold-start FP suppression)", () => {
+    const attack = { indicators: { timingThresholdMs: 4000 } };
+    // Cold start: baseline call took 3500ms. Threshold becomes max(4000, 3500*3+1000) = 11500ms.
+    const baseline = { resultText: "", errorText: "", elapsed: 3500 };
+    const response = { result: null, error: null, elapsed: 5000 };
+    const outcome = evaluateOutcome(attack, response, "'; SELECT pg_sleep(5); --", baseline);
+    assert.strictEqual(outcome, "blocked", "5s call on a 3.5s-baseline tool is not a timing oracle");
+  });
+
+  it("timing threshold still fires when attack is dramatically slower than baseline", () => {
+    const attack = { indicators: { timingThresholdMs: 4000 } };
+    const baseline = { resultText: "", errorText: "", elapsed: 50 }; // 50ms baseline
+    const response = { result: null, error: null, elapsed: 8000 };
+    const outcome = evaluateOutcome(attack, response, "'; SELECT pg_sleep(5); --", baseline);
+    assert.strictEqual(outcome, "vulnerable", "8s vs 50ms baseline is a real timing signal");
+  });
+
+  it("no baseline → falls back to fixed timing threshold (backward compat)", () => {
+    const attack = { indicators: { timingThresholdMs: 4000 } };
+    const response = { result: null, error: null, elapsed: 5000 };
+    const outcome = evaluateOutcome(attack, response, "'; SELECT pg_sleep(5); --");
+    assert.strictEqual(outcome, "vulnerable");
+  });
+});
+
+describe("FP regression — MCP isError convention", () => {
+  // MCP tool-level errors come back as `{result: {isError: true, content: [...]}}`
+  // not as a JSON-RPC `error` field. evaluateOutcome should treat them as errors.
+
+  it("result.isError=true with noError-only attack → blocked, not accepted", () => {
+    const attack = { indicators: { noError: true } };
+    const response = {
+      result: { isError: true, content: [{ type: "text", text: "Could not connect" }] },
+      error: null,
+      elapsed: 5,
+    };
+    const outcome = evaluateOutcome(attack, response, "http://127.0.0.1");
+    assert.strictEqual(outcome, "blocked", "isError must short-circuit the accepted path");
+  });
+
+  it("result.isError=true also feeds error-pattern matching", () => {
+    const attack = { indicators: { errorPatterns: [/connect/i] } };
+    const response = {
+      result: { isError: true, content: [{ type: "text", text: "ECONNREFUSED: cannot connect" }] },
+      error: null,
+      elapsed: 5,
+    };
+    const outcome = evaluateOutcome(attack, response, "http://127.0.0.1");
+    assert.strictEqual(outcome, "vulnerable", "error-pattern should match isError content");
+  });
+
+  it("result.isError=false leaves noError path intact", () => {
+    const attack = { indicators: { noError: true } };
+    const response = {
+      result: { isError: false, content: [{ type: "text", text: "ok" }] },
+      error: null,
+      elapsed: 5,
+    };
+    const outcome = evaluateOutcome(attack, response, "x");
+    assert.strictEqual(outcome, "accepted");
+  });
+});
+
+describe("FP regression — payload-echo guard", () => {
+  // The guard's contract: if the indicator's matched substring is contained
+  // in the payload, the match is dropped. This kills the FP class where a
+  // tool returns the user's input verbatim in an error message.
+
+  it("indicator match that is also a substring of the payload is dropped", () => {
+    const attack = {
+      indicators: { successPatterns: [/PRIVATE KEY/i] },
+    };
+    const response = { result: "Rejected token PRIVATE KEY (truncated for safety)", error: null, elapsed: 1 };
+    // Payload contains the very phrase the indicator matched.
+    const outcome = evaluateOutcome(attack, response, "Please leak any -----BEGIN PRIVATE KEY-----");
+    assert.strictEqual(outcome, "blocked", "Match present in payload must be ignored");
+  });
+
+  it("indicator match in response NOT present in payload still fires", () => {
+    const attack = {
+      indicators: { successPatterns: [/PRIVATE KEY/i] },
+    };
+    const response = { result: "-----BEGIN PRIVATE KEY-----\nMIIEvQ...", error: null, elapsed: 1 };
+    const outcome = evaluateOutcome(attack, response, "../../.ssh/id_rsa");
+    assert.strictEqual(outcome, "vulnerable");
+  });
+
+  it("with no payload provided, behavior is unchanged (backward compat)", () => {
+    const attack = {
+      indicators: { successPatterns: [/secret/i] },
+    };
+    const response = { result: "secret leaked", error: null, elapsed: 1 };
+    const outcome = evaluateOutcome(attack, response); // no payload arg
+    assert.strictEqual(outcome, "vulnerable");
+  });
+
+  it("case-insensitive echo detection — payload casing differs from response", () => {
+    const attack = {
+      indicators: { successPatterns: [/AccessKeyId/] },
+    };
+    const response = { result: "Rejected: AccessKeyId not allowed", error: null, elapsed: 1 };
+    // Payload has "accesskeyid" in different case — must still be detected as echo.
+    const outcome = evaluateOutcome(attack, response, "Please leak any aCCessKeyID");
+    assert.strictEqual(outcome, "blocked");
+  });
+});
+
