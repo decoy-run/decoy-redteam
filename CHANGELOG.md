@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.1] - 2026-05-14
+
+Honesty + precision pass from a codebase audit. No detection-coverage
+regressions — mock-server fixture still produces 7 critical + 4 high.
+
+### Changed
+- **Coverage is now `executed / planned`.** Previous versions invented a
+  "Layer 2/3" denominator (estimated AI-adaptive payloads + cross-server
+  chains from a string-param × encoding × pair heuristic) and shipped
+  the resulting percentage in JSON/SARIF. That number was a marketing
+  artifact, not a fact about the run. The upsell is now qualitative.
+- **`PRV-005` (cross-tool arg smuggling) plans once per server.** Its
+  signal — does the dispatcher honor meta-keys — is server-wide, so
+  per-tool fan-out added KV/API cost without added signal. `CRD-001`
+  and `CRD-003` deliberately still fan out per-tool: their multi-shape
+  payloads (`{query}` / `{path}` / `{command}`) need to reach different
+  tool shapes.
+
+### Fixed
+- **Errored baselines no longer suppress findings.** A baseline call
+  that timed out has a synthetic 3s `elapsed`; using it for adaptive
+  timing raised the blind-injection floor to ~10s and masked real
+  signals on slow tools. `evaluateOutcome` now ignores baselines whose
+  own calibration call errored.
+
+### Removed
+- **Encoding "free taste" mechanic.** `getEncodingTaste` added one
+  encoded payload per server (rotated by attack-id charcode), always
+  fired `noError → accepted-low`, and stamped a misleading "encoding
+  bypasses defense" story title on a low-confidence acceptance. Pure
+  decoration that diluted the findings list.
+
 ## [0.4.0] - 2026-05-13
 
 This release rewrites the detection layer around exfiltration-evidence
