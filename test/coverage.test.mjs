@@ -3,56 +3,58 @@ import assert from "node:assert/strict";
 import { calculateCoverage } from "../lib/coverage.mjs";
 
 describe("calculateCoverage", () => {
-  it("returns 100% when no Layer 2/3 applies", () => {
-    // Server with no string params → no encoding variants, no chains
-    const servers = [{
-      error: null,
-      tools: [{ name: "ping", inputSchema: { properties: { count: { type: "number" } } } }],
-    }];
-    const coverage = calculateCoverage(servers, 10);
-    assert.ok(coverage.percentage > 50, `Expected >50%, got ${coverage.percentage}%`);
+  const oneServer = [{
+    error: null,
+    tools: [
+      { name: "query", inputSchema: { properties: { sql: { type: "string" } } } },
+      { name: "read", inputSchema: { properties: { path: { type: "string" } } } },
+    ],
+  }];
+
+  it("reports 100% when every planned attack executed", () => {
+    const coverage = calculateCoverage(oneServer, { executed: 30, planned: 30 });
+    assert.strictEqual(coverage.percentage, 100);
+    assert.strictEqual(coverage.executed, 30);
+    assert.strictEqual(coverage.total, 30);
   });
 
-  it("returns lower % with complex tool surface", () => {
-    const servers = [{
-      error: null,
-      tools: [
-        { name: "query", inputSchema: { properties: { sql: { type: "string" }, db: { type: "string" } } } },
-        { name: "read", inputSchema: { properties: { path: { type: "string" } } } },
-        { name: "exec", inputSchema: { properties: { cmd: { type: "string" }, args: { type: "string" } } } },
-      ],
-    }];
-    const coverage = calculateCoverage(servers, 30);
-    assert.ok(coverage.percentage < 50, `Expected <50% for complex surface, got ${coverage.percentage}%`);
-    assert.ok(coverage.layer2 > 0, "Should estimate Layer 2 attacks");
+  it("reports the actual ratio when some attacks errored out", () => {
+    const coverage = calculateCoverage(oneServer, { executed: 18, planned: 30 });
+    assert.strictEqual(coverage.percentage, 60);
   });
 
-  it("estimates cross-server chains with 2+ servers", () => {
+  it("reports 0% when nothing executed yet (planned but not run)", () => {
+    const coverage = calculateCoverage(oneServer, { executed: 0, planned: 30 });
+    assert.strictEqual(coverage.percentage, 0);
+  });
+
+  it("returns 100% for an empty plan (avoid divide-by-zero)", () => {
+    const coverage = calculateCoverage([], { executed: 0, planned: 0 });
+    assert.strictEqual(coverage.percentage, 100);
+  });
+
+  it("counts tools across servers; excludes errored servers from serverCount", () => {
     const servers = [
-      { error: null, tools: [{ name: "a", inputSchema: { properties: { x: { type: "string" } } } }] },
-      { error: null, tools: [{ name: "b", inputSchema: { properties: { y: { type: "string" } } } }] },
+      { error: "dead", tools: [{ name: "x", inputSchema: { properties: {} } }] },
+      { error: null, tools: [{ name: "a", inputSchema: { properties: {} } }, { name: "b", inputSchema: { properties: {} } }] },
+      { error: null, tools: [{ name: "c", inputSchema: { properties: {} } }] },
     ];
-    const coverage = calculateCoverage(servers, 20);
-    assert.ok(coverage.layer3 > 0, "Should estimate cross-server chains");
-    assert.ok(coverage.serverCount === 2);
+    const coverage = calculateCoverage(servers, { executed: 10, planned: 10 });
+    assert.strictEqual(coverage.serverCount, 2);
+    // toolCount counts tools across ALL servers including errored, since the
+    // tool list is captured pre-error. Document the choice.
+    assert.strictEqual(coverage.toolCount, 4);
   });
 
-  it("skips errored servers", () => {
-    const servers = [
-      { error: "dead", tools: [] },
-      { error: null, tools: [{ name: "a", inputSchema: { properties: { x: { type: "string" } } } }] },
-    ];
-    const coverage = calculateCoverage(servers, 10);
-    assert.strictEqual(coverage.serverCount, 1);
-  });
-
-  it("returns correct structure", () => {
-    const coverage = calculateCoverage([], 0);
+  it("returns only honest fields — no layer1/layer2/layer3 fiction", () => {
+    const coverage = calculateCoverage([], { executed: 0, planned: 0 });
     assert.ok("executed" in coverage);
     assert.ok("total" in coverage);
     assert.ok("percentage" in coverage);
-    assert.ok("layer1" in coverage);
-    assert.ok("layer2" in coverage);
-    assert.ok("layer3" in coverage);
+    assert.ok("serverCount" in coverage);
+    assert.ok("toolCount" in coverage);
+    assert.strictEqual(coverage.layer1, undefined);
+    assert.strictEqual(coverage.layer2, undefined);
+    assert.strictEqual(coverage.layer3, undefined);
   });
 });

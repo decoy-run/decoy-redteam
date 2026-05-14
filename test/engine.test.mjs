@@ -120,6 +120,33 @@ describe("planAttacks", () => {
     assert.ok(ssrf.length > 0, "SSRF should still run against pure HTTP clients in safe mode");
   });
 
+  it("anyString-targeted attacks fire once per server, not once per tool", () => {
+    // Build a server with many string-param tools. Pre-fix, every
+    // anyString-targeted attack (CRD-001, CRD-003, PRV-005) fanned out
+    // 1× per tool. Post-fix, structural broad-targeting gate dedupes
+    // them to fire once per server like prompt-injection already did.
+    const tools = Array.from({ length: 10 }, (_, i) => ({
+      name: `tool_${i}`,
+      description: "Generic tool",
+      inputSchema: { properties: { x: { type: "string" } } },
+    }));
+    const plan = planAttacks([{
+      name: "wide", conn: true, error: null, tools,
+    }], { safe: true });
+
+    // Count plan entries per (attackId, category) for the three previously
+    // problematic anyString attacks.
+    const countsById = new Map();
+    for (const p of plan) {
+      countsById.set(p.attack.id, (countsById.get(p.attack.id) || 0) + 1);
+    }
+    // Each of these attacks has 3 payloads, so the dedup'd count should
+    // be exactly 3 (one tool × 3 payloads) rather than 30 (10 × 3).
+    assert.strictEqual(countsById.get("CRD-001"), 3, `CRD-001 should fire 3× total (1 tool × 3 payloads), got ${countsById.get("CRD-001")}`);
+    assert.strictEqual(countsById.get("CRD-003"), 3, `CRD-003 should fire 3× total, got ${countsById.get("CRD-003")}`);
+    assert.strictEqual(countsById.get("PRV-005"), 3, `PRV-005 should fire 3× total, got ${countsById.get("PRV-005")}`);
+  });
+
   it("adds one encoding taste per server", () => {
     const servers = [{
       name: "test-server",

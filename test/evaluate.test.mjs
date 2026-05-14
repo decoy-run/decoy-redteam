@@ -280,6 +280,30 @@ describe("FP regression — baseline suppression", () => {
     const outcome = evaluateOutcome(attack, response, "'; SELECT pg_sleep(5); --");
     assert.strictEqual(outcome, "vulnerable");
   });
+
+  it("errored baseline is ignored — adaptive timing falls back to the fixed threshold", () => {
+    // captureBaselines marks errored:true when the calibration call times
+    // out. Its elapsed value is the timeout floor, not a real latency.
+    // Using it for adaptive timing would mask a real blind-injection
+    // signal on the very tools that are slow enough to time out the
+    // baseline. Treat as absent.
+    const attack = { indicators: { timingThresholdMs: 4000 } };
+    const erroredBaseline = { errored: true, elapsed: 3000, resultText: "", errorText: "baseline timeout" };
+    const response = { result: null, error: null, elapsed: 5000 };
+    const outcome = evaluateOutcome(attack, response, "'; SELECT pg_sleep(5); --", erroredBaseline);
+    assert.strictEqual(outcome, "vulnerable", "Errored baseline should not raise the timing floor");
+  });
+
+  it("errored baseline is ignored — indicator suppression doesn't fire on synthetic errorText", () => {
+    // Defensive: a future indicator pattern that happens to match the
+    // string "baseline timeout" mustn't get suppressed by the synthetic
+    // baseline content.
+    const attack = { indicators: { errorPatterns: [/baseline/i] } };
+    const erroredBaseline = { errored: true, elapsed: 3000, resultText: "", errorText: "baseline timeout" };
+    const response = { result: null, error: "baseline failure leaked", elapsed: 10 };
+    const outcome = evaluateOutcome(attack, response, "x", erroredBaseline);
+    assert.strictEqual(outcome, "vulnerable");
+  });
 });
 
 describe("FP regression — MCP isError convention", () => {

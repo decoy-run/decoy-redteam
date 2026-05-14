@@ -639,12 +639,12 @@ async function main() {
       status(`  ${c.dim}Skipped ${skippedSideEffect} browser/window tool${skippedSideEffect > 1 ? "s" : ""} — use --full to include${c.reset}`);
     }
 
-    const coverage = calculateCoverage(connected, plan.length);
-    status(`  ${c.dim}Assessment coverage:${c.reset} ${c.bold}${coverage.percentage}%${c.reset}`);
-
-    const untested = coverage.total - coverage.executed;
-    if (untested > 0 && coverage.percentage < 90) {
-      status(`  ${c.dim}Advanced AI-powered red team would add ~${untested} AI-adaptive patterns  decoy.run/pricing${c.reset}`);
+    // Dry-run: nothing executed yet, so percentage is uninformative. Show
+    // the planned count instead and tease the paid tier qualitatively —
+    // not with an invented delta.
+    status(`  ${c.dim}Planned:${c.reset} ${c.bold}${plan.length} attacks${c.reset} across ${connected.length} server${connected.length > 1 ? "s" : ""}`);
+    if (!teamMode) {
+      status(`  ${c.dim}Advanced AI-powered red team adds AI-adaptive payloads and encoding bypasses  decoy.run/pricing${c.reset}`);
     }
 
     status(`\n  ${c.cyan}npx decoy-redteam --live${c.reset}                Execute attacks`);
@@ -842,12 +842,20 @@ async function main() {
   // Pro attacks are ADDITIONAL — they don't reduce the "what's left" estimate
   const l1Results = results.filter(r => r.outcome !== "error");
   const proResults = iterateResults.filter(r => r.outcome !== "error");
-  const coverage = calculateCoverage(connected, l1Results.length);
-  // If Pro ran, adjust the display to show total executed including Pro
+  // Planned = total attacks in the deterministic plan. Executed = ones
+  // that returned a non-error result. Honest percentage.
+  const coverage = calculateCoverage(connected, {
+    executed: l1Results.length,
+    planned: plan.length,
+  });
+  // Pro/Team adds AI-adaptive attacks on top — fold them in so the
+  // displayed numbers reflect the full run.
   if (proResults.length > 0) {
     coverage.executed += proResults.length;
     coverage.total += proResults.length;
-    coverage.percentage = Math.round((coverage.executed / coverage.total) * 100);
+    coverage.percentage = coverage.total > 0
+      ? Math.round((coverage.executed / coverage.total) * 100)
+      : 100;
   }
 
   // Kick off the redteam.complete event alongside output rendering.
@@ -1038,27 +1046,25 @@ function printSummary(stories, results, servers, coverage) {
     status(`  ${c.dim}·${c.reset} Export to SARIF for CI: ${c.cyan}npx decoy-redteam --live --sarif > findings.sarif${c.reset}`);
   }
 
-  // Coverage + Pro upsell (only for free users)
+  // Pro upsell (only for free users). No invented coverage delta — we no
+  // longer claim "we cover X% and paid covers Y% more." The qualitative
+  // pitch (AI-adaptive, encoding bypass, cross-server chains) is what we
+  // actually ship.
   if (!teamMode) {
-    const untested = coverage.total - coverage.executed;
-    if (untested > 0 && coverage.percentage < 90) {
-      status("");
-      status(`  ${c.dim}Assessment coverage:${c.reset} ${c.bold}${coverage.percentage}%${c.reset}  ${c.dim}(${coverage.executed} of ${coverage.total} patterns)${c.reset}`);
-      status("");
-      status(`  ${c.bold}Advanced AI-powered red team${c.reset} adds ${untested} AI-adaptive attack patterns:`);
-      if (coverage.layer2 > 0) {
-        status(`  ${c.dim}·${c.reset} Payloads generated for your ${coverage.toolCount} tool schemas`);
-        status(`  ${c.dim}·${c.reset} 25+ encoding bypass variants per injection vector`);
-      }
-      if (coverage.layer3 > 0) {
-        status(`  ${c.dim}·${c.reset} Cross-server chains across ${coverage.serverCount} servers`);
-      }
-      status(`  ${c.dim}·${c.reset} Exportable HTML report for security reviews`);
-      status(`  ${c.dim}·${c.reset} Continuous red teaming on a schedule`);
-      status("");
-      status(`  ${c.cyan}npx decoy-redteam --team${c.reset}      Get started`);
-      status(`  ${c.dim}decoy.run/pricing${c.reset}             Learn more`);
+    status("");
+    status(`  ${c.dim}Free tier: ${coverage.executed} deterministic attacks across ${coverage.serverCount} server${coverage.serverCount > 1 ? "s" : ""}.${c.reset}`);
+    status("");
+    status(`  ${c.bold}Advanced AI-powered red team${c.reset} adds:`);
+    status(`  ${c.dim}·${c.reset} AI-adaptive payloads generated for your tool schemas`);
+    status(`  ${c.dim}·${c.reset} 25+ encoding bypass variants per injection vector`);
+    if (coverage.serverCount >= 2) {
+      status(`  ${c.dim}·${c.reset} Cross-server chains across ${coverage.serverCount} servers`);
     }
+    status(`  ${c.dim}·${c.reset} Exportable HTML report for security reviews`);
+    status(`  ${c.dim}·${c.reset} Continuous red teaming on a schedule`);
+    status("");
+    status(`  ${c.cyan}npx decoy-redteam --team${c.reset}      Get started`);
+    status(`  ${c.dim}decoy.run/pricing${c.reset}             Learn more`);
   }
 
   status("");
