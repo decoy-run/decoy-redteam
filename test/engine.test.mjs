@@ -147,20 +147,6 @@ describe("planAttacks", () => {
     assert.strictEqual(countsById.get("PRV-005"), 3, `PRV-005 should fire 3× total, got ${countsById.get("PRV-005")}`);
   });
 
-  it("adds one encoding taste per server", () => {
-    const servers = [{
-      name: "test-server",
-      conn: true,
-      error: null,
-      tools: [
-        { name: "execute_query", description: "SQL", inputSchema: { properties: { query: { type: "string" } } } },
-        { name: "read_file", description: "Read file", inputSchema: { properties: { path: { type: "string" } } } },
-      ],
-    }];
-    const plan = planAttacks(servers, { safe: true });
-    const tastes = plan.filter(p => p.attack._isTaste);
-    assert.strictEqual(tastes.length, 1, `Expected 1 taste, got ${tastes.length}`);
-  });
 });
 
 describe("buildStories", () => {

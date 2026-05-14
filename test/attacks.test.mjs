@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { ATTACKS, ENCODINGS, matchAttacks, getEncodingTaste } from "../lib/attacks.mjs";
+import { ATTACKS, ENCODINGS, matchAttacks } from "../lib/attacks.mjs";
 
 describe("attack catalog", () => {
   it("has at least 50 attacks", () => {
@@ -210,19 +210,3 @@ describe("encodings", () => {
   });
 });
 
-describe("getEncodingTaste", () => {
-  it("returns an encoded variant", () => {
-    const attack = ATTACKS.find(a => a.id === "INJ-001");
-    const taste = getEncodingTaste(attack);
-    assert.ok(taste, "Should return a taste");
-    assert.ok(taste._isTaste);
-    assert.ok(taste._encodingVariant);
-    assert.ok(taste.id.endsWith("-ENC"));
-  });
-
-  it("returns null for attacks with no string payloads", () => {
-    const fake = { id: "FAKE", payloads: [{ obj: true }] };
-    const taste = getEncodingTaste(fake);
-    assert.strictEqual(taste, null);
-  });
-});
