@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { discoverConfigs, probeServers, captureBaselines, planAttacks, executeAttacks, buildStories, closeAll, isInteractiveSideEffectTool } from "../lib/engine.mjs";
 import { calculateCoverage } from "../lib/coverage.mjs";
+import { detectToolPoisoning } from "../lib/poisoning.mjs";
 import { toSarif, toJson } from "../lib/report.mjs";
 import { extractSource, extractGitHubSource } from "../lib/source.mjs";
 import {
@@ -512,6 +513,10 @@ async function main() {
   const toolCount = connected.reduce((sum, s) => sum + s.tools.length, 0);
   status("");
 
+  // Passive tool-poisoning scan — reads the advertised tool surface (no payloads
+  // sent), so it runs in dry-run too and flows through every output path.
+  const poisonStories = detectToolPoisoning(connected);
+
   // Plan attacks
   const safe = !fullMode;
   const plan = planAttacks(connected, { safe, categories: categoryFilter });
@@ -607,14 +612,30 @@ async function main() {
     }
   }
 
-  if (plan.length === 0) {
+  if (plan.length === 0 && poisonStories.length === 0) {
     status("  No applicable attacks for the discovered tools.\n  Hint: The discovered tools don't match any attack patterns. Try --category to see available categories\n");
     closeAll(servers);
     process.exit(0);
   }
 
-  // Dry-run mode: show plan and exit
-  if (dryRun) {
+  // Dry-run mode (or nothing executable but the tool surface is poisoned):
+  // report passive findings + the attack plan, then exit on severity.
+  if (dryRun || plan.length === 0) {
+    if (jsonMode || sarifMode) {
+      const meta = { version: VERSION, mode: "dry-run", servers: connected.length, tools: toolCount };
+      const cov = { executed: 0, total: plan.length, percentage: 0 };
+      const out = jsonMode ? toJson(poisonStories, cov, meta) : toSarif(poisonStories, cov, { version: VERSION });
+      closeAll(servers);
+      await new Promise(r => process.stdout.write(JSON.stringify(out, null, 2) + "\n", r));
+      await exitWithCode(poisonStories);
+      return;
+    }
+
+    if (poisonStories.length > 0) {
+      status(`  ${c.dim}── Passive Findings · tool poisoning (no execution needed) ──${c.reset}\n`);
+      printStories(poisonStories);
+    }
+
     const byCat = {};
     for (const item of plan) {
       const cat = item.attack.category;
@@ -654,7 +675,10 @@ async function main() {
     status(`  ${c.dim}  ${c.cyan}https://github.com/decoy-run/decoy-redteam${c.reset}\n`);
 
     closeAll(servers);
-    process.exit(0);
+    // Passive poisoning findings set the exit code even in dry-run, so CI can
+    // catch a hostile tool surface without ever going --live.
+    await exitWithCode(poisonStories);
+    return;
   }
 
   // Live mode: confirm before executing
@@ -835,8 +859,10 @@ async function main() {
     status(`  ${c.dim}Total: ${allResults.length} attacks in ${totalElapsed}s${c.reset}\n`);
   }
 
-  // Build stories from all results
-  const stories = buildStories(allResults);
+  // Build stories from all results. Passive poisoning findings (collected at
+  // connect time, before any payload) lead — they're high-confidence and need
+  // no execution to confirm.
+  const stories = [...poisonStories, ...buildStories(allResults)];
 
   // Coverage: count Layer 1 deterministic attacks only for the denominator calculation
   // Pro attacks are ADDITIONAL — they don't reduce the "what's left" estimate

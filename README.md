@@ -49,16 +49,17 @@ Or pin it in your CI:
 
 ## 🗂 What it tests
 
-**54 attack patterns** across 6 categories:
+**54 active attacks + 5 passive poisoning checks** across 7 categories:
 
 | Category | What it tests |
 |----------|---------------|
-| Input injection | SQL injection, command injection, path traversal, SSRF, template injection |
+| Input injection | SQL injection, command injection, path traversal, SSRF, template injection (SSTI → RCE) |
 | Prompt injection | Instruction override, role hijack, indirect injection, encoding bypass, multi-turn |
 | Credential exposure | .env files, cloud credentials, SSH keys, git tokens, shell history |
 | Protocol attacks | Malformed JSON-RPC, capability escalation, replay attacks, method injection |
 | Schema boundary | Type coercion, null bytes, overflow, prototype pollution, NoSQL operators |
 | Privilege escalation | Scope escape, undeclared access, dotfile enumeration, argument smuggling |
+| Tool poisoning | Instruction override, concealment directives, embedded exfiltration, fake system framing, invisible-character smuggling — read from the live tool surface, **runs in dry-run** |
 
 Every finding maps to [OWASP Top 10 for Agentic Applications 2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/).
 
@@ -104,7 +105,7 @@ npx decoy-redteam --live --category=input-injection,credential-exposure
 
 ## 🤖 Advanced AI-powered red team (paid plans)
 
-Free `decoy-redteam` runs 54 deterministic attack patterns. The paid tiers on [Decoy Guard](https://decoy.run/pricing) (Team $29/user/mo, Business $99/user/mo) add:
+Free `decoy-redteam` runs 54 deterministic attacks plus 5 passive tool-poisoning checks. The paid tiers on [Decoy Guard](https://decoy.run/pricing) (Team $29/user/mo, Business $99/user/mo) add:
 
 - **AI-adaptive attacks** — LLM-generated payloads specific to your tool schemas
 - **Encoding bypass suite** — 25+ encoding variants per injection vector

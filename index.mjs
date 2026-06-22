@@ -4,5 +4,6 @@ export { ATTACKS, ENCODINGS, matchAttacks, getEncodingTaste } from "./lib/attack
 export { McpConnection } from "./lib/transport.mjs";
 export { discoverConfigs, probeServers, planAttacks, executeAttacks, buildStories, closeAll } from "./lib/engine.mjs";
 export { calculateCoverage } from "./lib/coverage.mjs";
+export { detectToolPoisoning, POISONING_SIGNATURES } from "./lib/poisoning.mjs";
 export { toSarif, toJson } from "./lib/report.mjs";
 export { extractSource, extractGitHubSource } from "./lib/source.mjs";

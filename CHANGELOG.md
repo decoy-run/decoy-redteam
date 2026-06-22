@@ -4,6 +4,48 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] - 2026-06-22
+
+New attack family: **tool poisoning** — the signature MCP attack. An MCP server
+advertises each tool with a name, description, and JSON schema, and those
+strings are fed to the agent's model verbatim. A malicious or compromised server
+can smuggle instructions there to hijack the agent. decoy-redteam now reads the
+tool surface the server *actually serves at runtime* and flags it.
+
+This is the runtime complement to decoy-scan's static check: scan inspects what
+you installed; redteam inspects what the server hands the model right now —
+catching rug-pulls and servers whose served metadata differs from their
+manifest.
+
+### Added
+
+- **`tool-poisoning` category (TPA-001…005)** — passive detection over the live
+  tool surface, no payloads sent:
+  - **TPA-001** instruction override (`ignore previous instructions…`) — critical
+  - **TPA-002** concealment directive (`do not tell the user…`) — critical
+  - **TPA-003** embedded data-exfiltration instruction (verb + external host +
+    sensitive object) — critical
+  - **TPA-004** fake system framing / tool-precedence priming (`<IMPORTANT>`,
+    `you are now…`, `before any other tool…`) — high
+  - **TPA-005** invisible-character smuggling (zero-width, bidi, Unicode Tags
+    block), rendered in evidence as `‹U+XXXX›` — high
+- **Runs in dry-run.** Because it sends nothing, poisoning detection works
+  without `--live` and sets the exit code (2 on critical), so CI catches a
+  hostile tool surface before an agent ever touches the server.
+- `--json` / `--sarif` now emit passive findings in dry-run (previously these
+  produced no output without `--live`).
+- New exports: `detectToolPoisoning`, `POISONING_SIGNATURES`.
+
+### Verified
+
+- Full suite 171 tests passing (was 146) — +25 poisoning cases, including 10
+  false-positive-resistance cases (`ignore case`, `do not pass secrets`, Slack
+  webhooks, etc.).
+- Live smoke through the CLI against a poisoned stdio server: TPA-001/002/005
+  fire with `‹U+XXXX›`-rendered evidence and dry-run exits 2. The same run
+  discovered four real configured MCP servers (97 tools) and produced **zero
+  false positives**.
+
 ## [0.5.0] - 2026-06-22
 
 Rebuilt server-side template injection (SSTI) detection — the thinnest
