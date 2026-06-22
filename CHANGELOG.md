@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] - 2026-06-22
+
+Rebuilt server-side template injection (SSTI) detection — the thinnest
+high-severity surface in the catalog (one attack, a weak oracle). SSTI has the
+cleanest precision oracle available: arithmetic evaluation can't be a payload
+echo.
+
+### Added
+
+- **INJ-017 — template injection runtime object reflection (RCE reach).**
+  Reflection-only payloads (no process spawn) that ask the engine to walk its
+  own object graph. A vulnerable Jinja2 returns Python class reprs
+  (`<class 'object'>`); Spring SpEL returns a Java class handle
+  (`class java.lang.Runtime`). Both strings are engine-emitted, never carried in
+  the payload, so they prove server-side object access — the reconnaissance step
+  directly before remote code execution. Critical, maps to OWASP ASI02.
+
+### Changed
+
+- **INJ-013 oracle rebuilt.** The old anchor was a bare `49` (from `7×7`), which
+  false-fired on any tool that returned the number 49. Replaced with the
+  distinctive product `1337×31337 = 41897569`: each payload carries the same
+  multiplication in a different engine syntax (Jinja2/Twig, Freemarker/JSP-EL,
+  ERB/EJS, Ruby interpolation, Razor), and a response containing that eight-digit
+  product is unambiguous evaluation. Severity raised high → critical.
+- **INJ-013 targeting widened to the real SSTI surface.** Was four tool-name
+  tokens (`template|render|format|eval`); now matches email/message/report/
+  notification builders and matches on tool *description* too (e.g. "renders a
+  Jinja2 template"). Dropped `eval`/`expression`/`query` from the targeter so it
+  no longer chases calculators and SQL tools.
+
+### Verified
+
+- Full suite 146 tests passing (was 134) — +9 SSTI false-positive/true-positive
+  regression cases, +3 targeting cases.
+- Live smoke through the engine against a real stdio MCP server: both attacks
+  fire on a vulnerable render tool with captured evidence; **zero false
+  positives** on a safe render tool that returned "49 messages" and echoed the
+  payload verbatim (the two classic SSTI FP traps).
+
 ## [0.4.1] - 2026-05-14
 
 Honesty + precision pass from a codebase audit. No detection-coverage

@@ -186,6 +186,29 @@ describe("matchAttacks", () => {
     }
   });
 
+  it("matches template injection to render and email tools", () => {
+    for (const [name, param] of [["render_template", "content"], ["send_email", "body"], ["compose_message", "subject"]]) {
+      const tool = { name, description: "renders user input", inputSchema: { properties: { [param]: { type: "string" } } } };
+      const matched = matchAttacks(tool, tool.inputSchema);
+      const template = matched.filter(a => a.subcategory === "template");
+      assert.ok(template.length >= 2, `Expected 2+ template attacks for ${name}, got ${template.length}`);
+    }
+  });
+
+  it("matches template injection by description even when the name is neutral", () => {
+    const tool = { name: "build_greeting", description: "Renders a Jinja2 template with {{ name }} placeholders", inputSchema: { properties: { value: { type: "string" } } } };
+    const matched = matchAttacks(tool, tool.inputSchema);
+    const template = matched.filter(a => a.subcategory === "template");
+    assert.ok(template.length >= 1, `Expected description-based template match, got ${template.length}`);
+  });
+
+  it("does not match template injection to a plain calculator (expression param)", () => {
+    const tool = { name: "calculator", description: "Evaluate a math expression", inputSchema: { properties: { expression: { type: "string" } } } };
+    const matched = matchAttacks(tool, tool.inputSchema);
+    const template = matched.filter(a => a.subcategory === "template");
+    assert.strictEqual(template.length, 0, "Template injection should not target calculator tools");
+  });
+
   it("skips _raw protocol attacks", () => {
     const tool = { name: "anything", description: "test", inputSchema: { properties: { x: { type: "string" } } } };
     const matched = matchAttacks(tool, tool.inputSchema);

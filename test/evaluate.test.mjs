@@ -231,6 +231,79 @@ describe("FP regression — broad indicators removed", () => {
   });
 });
 
+describe("FP regression — template injection (SSTI)", () => {
+  // INJ-013's old oracle was a bare `49` (from 7×7), which false-fired on any
+  // tool that returned the number 49. The rebuilt oracle is the distinctive
+  // product 1337×31337=41897569, and INJ-017 anchors on engine-emitted object
+  // reprs. Both can only come from server-side evaluation, never a payload echo.
+
+  it("Template injection (INJ-013): '49 results found' does NOT fire", () => {
+    const attack = attackById("INJ-013");
+    const response = { result: "49 results found", error: null, elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, "{{1337*31337}}");
+    assert.strictEqual(outcome, "blocked", "A benign 49 must no longer fire template injection");
+  });
+
+  it("Template injection (INJ-013): payload echoed verbatim (not evaluated) does NOT fire", () => {
+    const attack = attackById("INJ-013");
+    const response = { result: "Rendered template: {{1337*31337}}", error: null, elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, "{{1337*31337}}");
+    assert.strictEqual(outcome, "blocked", "Echoing the unevaluated expression is not evaluation");
+  });
+
+  it("Template injection (INJ-013): a near-miss number (off by one) does NOT fire", () => {
+    const attack = attackById("INJ-013");
+    const response = { result: "Order total: 41897568", error: null, elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, "{{1337*31337}}");
+    assert.strictEqual(outcome, "blocked");
+  });
+
+  it("Template injection (INJ-013): the evaluated product DOES fire", () => {
+    const attack = attackById("INJ-013");
+    const response = { result: "Hello, your code is 41897569", error: null, elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, "{{1337*31337}}");
+    assert.strictEqual(outcome, "vulnerable", "The evaluated product is unambiguous SSTI");
+  });
+
+  it("Template injection (INJ-013): baseline already emitting the product is suppressed", () => {
+    const attack = attackById("INJ-013");
+    const baseline = { resultText: "build #41897569", errorText: "", elapsed: 5 };
+    const response = { result: "build #41897569", error: null, elapsed: 6 };
+    const outcome = evaluateOutcome(attack, response, "{{1337*31337}}", baseline);
+    assert.strictEqual(outcome, "blocked", "A tool that normally emits the number is not SSTI");
+  });
+
+  it("Template reflection (INJ-017): a benign string mentioning class does NOT fire", () => {
+    const attack = attackById("INJ-017");
+    const response = { result: "Your class enrollment is confirmed", error: null, elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, "{{ ''.__class__.__mro__ }}");
+    assert.strictEqual(outcome, "blocked");
+  });
+
+  it("Template reflection (INJ-017): the engine rejecting __class__ does NOT fire", () => {
+    const attack = attackById("INJ-017");
+    const response = { result: null, error: "Unknown attribute '__class__' on str", elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, "{{ ''.__class__.__mro__ }}");
+    assert.strictEqual(outcome, "blocked", "A rejected probe is not evaluation");
+  });
+
+  it("Template reflection (INJ-017): Python class repr DOES fire", () => {
+    const attack = attackById("INJ-017");
+    const response = { result: "(<class 'str'>, <class 'object'>)", error: null, elapsed: 5 };
+    const outcome = evaluateOutcome(attack, response, "{{ ''.__class__.__mro__ }}");
+    assert.strictEqual(outcome, "vulnerable");
+  });
+
+  it("Template reflection (INJ-017): Java SpEL class handle DOES fire (and survives echo guard)", () => {
+    const attack = attackById("INJ-017");
+    const response = { result: "class java.lang.Runtime", error: null, elapsed: 5 };
+    // The payload carries `java.lang.Runtime` but not the engine-emitted
+    // `class ` prefix, so the full match isn't a payload substring.
+    const outcome = evaluateOutcome(attack, response, "${T(java.lang.Runtime)}");
+    assert.strictEqual(outcome, "vulnerable");
+  });
+});
+
 describe("FP regression — baseline suppression", () => {
   // Baseline is a benign call against the tool captured before attacks. If
   // the same indicator already matches the baseline, the attack response
