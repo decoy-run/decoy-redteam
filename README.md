@@ -102,6 +102,11 @@ npx decoy-redteam --live --category=input-injection,credential-exposure
 | 0 | No critical or high findings |
 | 1 | High-risk findings |
 | 2 | Critical findings |
+| 130 | Interrupted with Ctrl-C |
+
+Usage errors (unknown flag or category) and crashes exit `1`, unchanged from
+earlier versions. In `--json` mode a crash also prints an `error` key, so a
+machine consumer can tell it apart from a real finding.
 
 ## 🤖 Advanced AI-powered red team (paid plans)
 
@@ -113,7 +118,10 @@ Free `decoy-redteam` runs 54 deterministic attacks plus 5 passive tool-poisoning
 - **Exportable HTML reports** — branded, print-ready security assessments
 - **Continuous red teaming** — scheduled runs against your live MCPs
 
-Run with `--team --token=YOUR_TOKEN`.
+Run with `--team --token-file=PATH`.
+
+`--token=` is visible to every process on the machine via `ps` and lands in
+shell history, so prefer `--token-file=` (or `DECOY_TOKEN_FILE`) in CI.
 
 ## 📚 Library
 

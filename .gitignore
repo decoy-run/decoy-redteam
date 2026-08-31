@@ -1,1 +1,8 @@
+node_modules/
 .DS_Store
+.env*
+*.log
+# Local miniflare/wrangler state. It is dev scratch, it sits under lib/ which
+# the package `files` allowlist ships, and its cf.json records the developer's
+# colo, ASN, city and lat/long — none of which belongs on npm.
+.wrangler/

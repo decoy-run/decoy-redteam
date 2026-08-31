@@ -22,6 +22,17 @@ import {
   maybePrintClaimURL,
   summarizeRedteamForTelemetry,
 } from "../lib/telemetry.mjs";
+import {
+  EXIT_USAGE,
+  findUnknownFlag,
+  reportUnknownFlag,
+  reportUnknownCommand,
+  resolveColor,
+  canPrompt,
+  fetchWithTimeout,
+  isTimeoutError,
+  onInterrupt,
+} from "../lib/argv.mjs";
 
 // ─── Version ───
 
@@ -32,19 +43,43 @@ const VERSION = PKG.version;
 // ─── Args ───
 
 const args = process.argv.slice(2);
-const flag = (name) => args.includes(`--${name}`) || args.includes(`-${name[0]}`);
+
+// Short aliases are declared, never derived. The old `flag()` matched
+// `-${name[0]}` for every long flag, which quietly made `-n` mean both
+// --no-color and --no-telemetry, `-p` trigger the --pro deprecation warning,
+// and `-t` turn on paid team mode. Only these five have short forms.
+// No short form for --live on purpose: `-l` previously did nothing, and
+// silently promoting it to "execute attacks" is not a change to make to a tool
+// that fires payloads at live servers.
+const SHORT = { h: "help", V: "version", q: "quiet" };
+
+// Every flag decoy-redteam accepts, so a typo is an error rather than a
+// silently different run.
+const KNOWN_FLAGS = new Set([
+  "live", "full", "team", "pro", "target", "category", "json", "sarif", "brief",
+  "quiet", "q", "no-input", "no-color", "color", "no-telemetry",
+  "token", "token-file", "repo", "version", "V", "help", "h",
+]);
+
+const flag = (name) => {
+  if (args.includes(`--${name}`)) return true;
+  for (const [short, long] of Object.entries(SHORT)) {
+    if (long === name && args.includes(`-${short}`)) return true;
+  }
+  return false;
+};
 const flagVal = (name) => {
   const arg = args.find(a => a.startsWith(`--${name}=`));
-  return arg ? arg.split("=").slice(1).join("=") : null;
+  return arg ? arg.slice(name.length + 3) : null;
 };
 
 const jsonMode = flag("json");
 const sarifMode = flag("sarif");
-const dryRun = !args.includes("--live");
+const dryRun = !flag("live");
 const fullMode = flag("full");
-const helpMode = flag("help") || flag("h");
-const versionMode = args.includes("--version") || args.includes("-V");
-const quietMode = flag("quiet") || flag("q");
+const helpMode = flag("help");
+const versionMode = flag("version");
+const quietMode = flag("quiet");
 const briefMode = flag("brief");
 // --team is the primary flag; --pro is a deprecated alias kept for existing scripts.
 const teamMode = flag("team") || flag("pro");
@@ -70,17 +105,33 @@ function saveStoredToken(token) {
 // is a sign-in convenience, not blanket telemetry consent. It's consulted only
 // inside `if (teamMode)` below as auth for the paid feature the user explicitly
 // opted into via --team.
-let tokenArg = flagVal("token") || process.env.DECOY_TOKEN;
+// A token on the command line is readable by every process on the box via
+// `ps` and lands in shell history. --token-file/DECOY_TOKEN_FILE is the form
+// to use in CI.
+function loadTokenFile(path) {
+  try {
+    const t = readFileSync(path, "utf8").trim();
+    if (t.length < 16) {
+      process.stderr.write(`error: token file ${path} does not contain a valid token\n`);
+      process.exit(EXIT_USAGE);
+    }
+    return t;
+  } catch (e) {
+    process.stderr.write(`error: cannot read token file ${path}: ${e.message}\n`);
+    process.exit(EXIT_USAGE);
+  }
+}
+const tokenFileArg = flagVal("token-file") || process.env.DECOY_TOKEN_FILE;
+let tokenArg = (tokenFileArg ? loadTokenFile(tokenFileArg) : null)
+  || flagVal("token")
+  || process.env.DECOY_TOKEN;
 const repoArg = flagVal("repo");
 const API_BASE = (process.env.DECOY_API_BASE || "https://app.decoy.run/api").replace(/\/$/, "");
 
 // ─── Color support ───
 
 const isTTY = process.stderr.isTTY;
-const noColor = flag("no-color") ||
-  "NO_COLOR" in process.env ||
-  process.env.TERM === "dumb" ||
-  (!isTTY && !process.env.FORCE_COLOR);
+const noColor = !resolveColor(args, process.stderr);
 
 const c = noColor
   ? { bold: "", dim: "", red: "", green: "", yellow: "", orange: "", cyan: "", magenta: "", white: "", reset: "", underline: "" }
@@ -98,10 +149,49 @@ const c = noColor
     underline: "\x1b[4m",
   };
 
+// ─── Argument validation ───
+
+const unknownFlag = findUnknownFlag(args, KNOWN_FLAGS);
+if (unknownFlag) {
+  reportUnknownFlag(unknownFlag, KNOWN_FLAGS, "decoy-redteam");
+  process.exit(EXIT_USAGE);
+}
+
+// decoy-redteam has no subcommands — a stray positional is almost always a
+// flag typed without its dashes, or a server name that belongs in --target.
+const positional = args.filter(a => !a.startsWith("-"));
+if (positional.length > 0) {
+  reportUnknownCommand(positional[0], [], "decoy-redteam");
+  process.stderr.write(`  decoy-redteam takes no subcommands. To scope a run: --target=${positional[0]}\n`);
+  process.exit(EXIT_USAGE);
+}
+
+const CATEGORIES = [
+  "input-injection", "prompt-injection", "privilege-escalation",
+  "credential-exposure", "protocol-attacks", "schema-boundary",
+];
+for (const cat of categoryFilter || []) {
+  const name = cat.trim();
+  if (!name || CATEGORIES.includes(name)) continue;
+  process.stderr.write(`error: unknown category "${name}"\n`);
+  process.stderr.write(`  Valid: ${CATEGORIES.join(", ")}\n`);
+  process.exit(EXIT_USAGE);
+}
+
 if (jsonMode && sarifMode) {
   process.stderr.write("error: --json and --sarif are mutually exclusive\n");
-  process.exit(1);
+  process.exit(EXIT_USAGE);
 }
+
+// Fail here rather than after spawning and probing every configured server:
+// a CI run that can't answer the confirmation prompt should find out in
+// milliseconds, not at the end of a discovery pass.
+if (!dryRun && process.env.DECOY_REDTEAM_CONFIRM !== "yes" && !canPrompt(args)) {
+  process.stderr.write("error: --live needs an interactive terminal to confirm\n");
+  process.stderr.write("  For CI, set DECOY_REDTEAM_CONFIRM=yes to accept the authorization warning.\n");
+  process.exit(EXIT_USAGE);
+}
+
 
 const SEV_COLOR = { critical: c.red, high: c.orange, medium: c.yellow, low: c.dim };
 const SEV_ICON = { critical: "✗", high: "✗", medium: "~", low: " " };
@@ -120,6 +210,10 @@ function data(msg) {
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+// Tracked so the interrupt handler can clear the line and restore the cursor
+// before the shell prompt comes back.
+let activeSpinner = null;
+
 function spinner(label) {
   // Non-TTY (and machine-readable modes): no animation, but still surface the final status message
   // so phase transitions are visible in piped output, CI logs, and test harnesses.
@@ -127,16 +221,25 @@ function spinner(label) {
     return { stop(msg) { if (msg) status(msg); } };
   }
   let i = 0;
+  const started = Date.now();
+  process.stderr.write("\x1b[?25l");
   const id = setInterval(() => {
-    process.stderr.write(`\r\x1b[K  ${c.dim}${SPINNER_FRAMES[i++ % SPINNER_FRAMES.length]} ${label}${c.reset}`);
+    // Attack execution can run for minutes. Past a few seconds, show elapsed
+    // time so a long phase reads as working rather than wedged.
+    const secs = Math.round((Date.now() - started) / 1000);
+    const elapsed = secs >= 3 ? ` ${c.dim}(${secs}s)${c.reset}` : "";
+    process.stderr.write(`\r\x1b[K  ${c.dim}${SPINNER_FRAMES[i++ % SPINNER_FRAMES.length]} ${label}${c.reset}${elapsed}`);
   }, 80);
-  return {
+  const handle = {
     stop(msg) {
       clearInterval(id);
-      process.stderr.write("\r\x1b[K");
+      process.stderr.write("\r\x1b[K\x1b[?25h");
+      if (activeSpinner === handle) activeSpinner = null;
       if (msg) status(msg);
     },
   };
+  activeSpinner = handle;
+  return handle;
 }
 
 // ─── Browser-based token capture ───
@@ -156,6 +259,11 @@ function openBrowser(url) {
 }
 
 async function getTokenViaBrowser() {
+  if (!canPrompt(args)) {
+    process.stderr.write("error: sign-in needs an interactive terminal\n");
+    process.stderr.write("  Pass an existing token instead: --token-file=PATH, or set DECOY_TOKEN_FILE.\n");
+    process.exit(EXIT_USAGE);
+  }
   const url = "https://app.decoy.run/dashboard?tab=settings#s-setup";
   status("");
   status(`  ${c.bold}Sign in to Decoy${c.reset}`);
@@ -193,9 +301,10 @@ async function confirm(message) {
   // CI/testing escape hatch — not a CLI flag, deliberate friction preserved
   if (process.env.DECOY_REDTEAM_CONFIRM === "yes") return true;
 
-  if (!isTTY) {
-    process.stderr.write("Error: --live requires an interactive terminal for confirmation.\n");
-    process.exit(1);
+  if (!canPrompt(args)) {
+    process.stderr.write("error: --live needs an interactive terminal to confirm\n");
+    process.stderr.write("  For CI, set DECOY_REDTEAM_CONFIRM=yes to accept the authorization warning.\n");
+    process.exit(EXIT_USAGE);
   }
   const rl = createInterface({ input: process.stdin, output: process.stderr });
   return new Promise((resolve) => {
@@ -235,11 +344,14 @@ ${c.bold}Output${c.reset}
   --brief          Minimal JSON summary (for agents with limited context)
   --quiet, -q      Suppress status messages
   --no-color       Disable color output
+  --color          Force color output
+  --no-input       Never prompt; fail instead of waiting for input
   --no-telemetry   Disable anonymized telemetry (or set DECOY_TELEMETRY=0)
 
 ${c.bold}Advanced AI-powered red team${c.reset} (Team / Business plans)
   --team               AI-adaptive attacks + source code analysis
-  --team --token=TOKEN Authenticate with Decoy Guard account
+  --team --token=TOKEN Authenticate with Decoy Guard account (visible in \`ps\`)
+  --team --token-file=PATH  Read the token from a file — prefer this in CI
   --team --repo=OWNER/REPO  Fetch source from GitHub (public or with GITHUB_TOKEN)
   --pro                Deprecated alias for --team
 
@@ -262,16 +374,29 @@ ${c.bold}Examples${c.reset}
   DECOY_REDTEAM_CONFIRM=yes npx decoy-redteam --live --json   CI/CD usage
 
 ${c.bold}Exit codes${c.reset}
-  0  No critical or high findings
-  1  High-risk findings
-  2  Critical findings
+    0  No critical or high findings
+    1  High-risk findings, or the command failed
+    2  Critical findings
+  130  Interrupted with Ctrl-C
+
+${c.bold}Environment${c.reset}
+  DECOY_TOKEN                API token (--token-file is safer)
+  DECOY_TOKEN_FILE           Path to a file containing the API token
+  DECOY_REDTEAM_CONFIRM=yes  Skip the --live confirmation prompt (CI)
+  DECOY_REDTEAM_AUTHORIZED=1 Suppress the authorization warning
+  DECOY_API_BASE             Override the API endpoint
+  GITHUB_TOKEN               Auth for --repo on private repositories
+  DECOY_TELEMETRY=0          Disable anonymized telemetry
+  NO_COLOR                   Disable colored output
 
 ${c.bold}Agent integration${c.reset}
   This CLI ships with AGENTS.md for AI agent reference.
   Use --json for structured output. Use --brief for minimal summaries.
   Set DECOY_REDTEAM_CONFIRM=yes to skip confirmation in CI/CD.
 
-${c.dim}https://decoy.run${c.reset}`);
+${c.bold}Learn more${c.reset}
+  Docs         ${c.cyan}https://decoy.run/docs${c.reset}
+  Report a bug ${c.cyan}https://github.com/decoy-run/decoy-redteam/issues${c.reset}`);
   process.exit(0);
 }
 
@@ -317,7 +442,7 @@ async function uploadResults(stories, coverage, servers, token) {
   };
 
   try {
-    const res = await fetch(`${API_BASE}/redteam/upload`, {
+    const res = await fetchWithTimeout(`${API_BASE}/redteam/upload`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
       body: JSON.stringify(payload),
@@ -345,11 +470,13 @@ async function main() {
   const runId = newRunId();
   trackTelemetry(flushTelemetryQueue());
 
-  // SIGINT handler — clean up spawned processes
+  // Ctrl-C must reap the MCP servers we spawned, or they linger holding
+  // stdio. A second Ctrl-C skips that and exits immediately.
   const servers = [];
-  const cleanup = () => { closeAll(servers); process.exit(130); };
-  process.on("SIGINT", cleanup);
-  process.on("SIGTERM", cleanup);
+  onInterrupt(() => {
+    activeSpinner?.stop();
+    closeAll(servers);
+  });
 
   status(`\n  ${c.bold}decoy-redteam${c.reset} ${c.dim}v${VERSION}${c.reset}\n`);
 
@@ -416,7 +543,7 @@ async function main() {
 
     // Validate the token (whether from flag, env, stored, or pasted) against Guard.
     try {
-      const res = await fetch(`${API_BASE}/billing?token=${encodeURIComponent(tokenArg)}`);
+      const res = await fetchWithTimeout(`${API_BASE}/billing?token=${encodeURIComponent(tokenArg)}`, {}, 15000);
       const billing = await res.json();
       const paidPlan = billing.plan === "team" || billing.plan === "pro" || billing.plan === "business";
       if (paidPlan) {
@@ -573,11 +700,11 @@ async function main() {
 
     const sp3 = spinner("Analyzing code + generating attacks…");
     try {
-      const res = await fetch(`${API_BASE}/redteam/plan`, {
+      const res = await fetchWithTimeout(`${API_BASE}/redteam/plan`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${tokenArg}` },
         body: JSON.stringify({ servers: serverSchemas }),
-      });
+      }, 120000);
       if (res.ok) {
         const data = await res.json();
         proPlan = (data.attacks || []).map(a => {
@@ -789,11 +916,11 @@ async function main() {
         tools: s.tools.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
       }));
 
-      const iterRes = await fetch(`${API_BASE}/redteam/iterate`, {
+      const iterRes = await fetchWithTimeout(`${API_BASE}/redteam/iterate`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${tokenArg}` },
         body: JSON.stringify({ servers: serverSchemas, results: resultSummary }),
-      });
+      }, 120000);
 
       if (iterRes.ok) {
         const iterData = await iterRes.json();
@@ -1123,6 +1250,20 @@ async function exitWithCode(stories) {
 // ─── Run ───
 
 main().catch((e) => {
-  process.stderr.write(`\n  ${c?.red || ""}Error: ${e.message}${c?.reset || ""}\n\n`);
+  // Exits 1, as it always has. Changing a published exit code could break a
+  // pipeline that branches on it — the `error` key below is how a machine
+  // consumer tells a crash apart from "high-risk findings".
+  if (jsonMode || sarifMode) {
+    process.stdout.write(JSON.stringify({
+      tool: "decoy-redteam",
+      version: VERSION,
+      error: e.message,
+      exitCode: 1,
+    }) + "\n");
+  }
+  const detail = isTimeoutError(e) ? `${e.message} (timed out)` : e.message;
+  process.stderr.write(`\n  ${c?.red || ""}error:${c?.reset || ""} ${detail}\n`);
+  process.stderr.write(`  ${c?.dim || ""}This is a bug in decoy-redteam. Please report it:${c?.reset || ""}\n`);
+  process.stderr.write(`  ${c?.dim || ""}https://github.com/decoy-run/decoy-redteam/issues/new${c?.reset || ""}\n\n`);
   process.exit(1);
 });

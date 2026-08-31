@@ -86,8 +86,15 @@ Mock server at `test/fixtures/mock-server.mjs` — deliberately vulnerable, used
 | `--category=LIST` | Comma-separated categories |
 | `--json` | JSON output to stdout |
 | `--sarif` | SARIF 2.1.0 output |
-| `--quiet` | Suppress status messages |
-| `--no-color` | Disable colors |
+| `--quiet`, `-q` | Suppress status messages |
+| `--token-file=PATH` | Read the API token from a file (prefer over `--token=`) |
+| `--no-input` | Never prompt; fail instead of waiting for input |
+| `--color` / `--no-color` | Force / disable color |
+
+Short aliases are exactly `-h`, `-V`, `-q`. There is no `-l` for `--live`.
+Unrecognized flags and `--category` values exit `1` with a spelling
+suggestion on stderr. `decoy-redteam` has no subcommands — a bare positional is an error
+pointing at `--target=`.
 
 ## `--brief` Flag
 
@@ -120,3 +127,8 @@ All fields are always present. `status` is `"fail"` when `critical > 0 || high >
 - `0` — No critical or high findings
 - `1` — High-risk findings
 - `2` — Critical findings
+- `130` — Interrupted with Ctrl-C
+
+Usage errors and crashes exit `1`. On exit `1`, check for an `error` key before
+trusting the severity reading: a crash emits `{tool, version, error, exitCode}`
+on stdout and produced no verdict.

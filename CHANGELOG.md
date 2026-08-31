@@ -4,6 +4,50 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0] - 2026-08-31
+
+A CLI usability pass against the [Command Line Interface Guidelines](https://clig.dev).
+Attack behavior is unchanged.
+
+### Fixed
+- **Undeclared single-letter flags.** `flag()` matched `-${name[0]}` for every
+  long flag, so `-n` silently meant both `--no-color` and `--no-telemetry`, `-p`
+  tripped the `--pro` deprecation warning, and `-t` turned on paid team mode.
+  Short forms are declared explicitly now: `-h`, `-V`, `-q`. `-l` is
+  deliberately *not* an alias for `--live` — promoting a flag that previously
+  did nothing to "execute attacks" is not a safe change.
+- **A misspelled flag no longer changes the run silently.** Unrecognized flags
+  are an error with a spelling suggestion.
+- **An unknown `--category` value was ignored**, quietly running every category
+  instead of the one asked for.
+- **`--live` in CI failed only after probing every server.** The check for an
+  answerable prompt now happens before any server is spawned.
+- **Ctrl-C left spawned MCP servers behind** if it landed during a network call.
+
+- **Local wrangler state was being published to npm.** `lib/.wrangler/` sat
+  inside the `lib/` directory that the package `files` allowlist ships, so
+  172 kB of miniflare cache went out with every release — including a `cf.json`
+  recording the developer's colo, ASN, city and lat/long. Now gitignored and
+  excluded from the tarball, which drops from 26 files to 15. `.gitignore` also
+  gained `node_modules/`, `.env*` and `*.log`, which it was missing entirely.
+
+### Added
+- **`--token-file=PATH` and `DECOY_TOKEN_FILE`.** A token in `--token=` is
+  visible to every process on the machine via `ps`.
+- **`--no-input`** and **`--color`**.
+- **Network deadlines** on every API call, including the AI-adaptive endpoints.
+- **Elapsed time on the spinner**, so a long attack phase reads as working.
+- **`Environment` and `Learn more` sections in `--help`**.
+
+### Changed
+- In `--json`/`--sarif` mode a fatal error now prints a JSON error object to
+  stdout (`{tool, version, error, exitCode}`), so a machine consumer can tell a
+  crash apart from a real finding.
+
+**Exit codes are unchanged.** `0`/`1`/`2` mean exactly what they always have,
+and usage errors and crashes still exit `1`. Ctrl-C exits `130`, as it did
+before.
+
 ## [0.6.0] - 2026-06-22
 
 New attack family: **tool poisoning** — the signature MCP attack. An MCP server

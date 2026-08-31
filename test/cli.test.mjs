@@ -36,6 +36,56 @@ describe("flag parsing", () => {
   });
 });
 
+describe("argument hygiene", () => {
+  it("rejects an unknown flag instead of ignoring it", () => {
+    const { stderr, code } = run(["--jsom"]);
+    assert.strictEqual(code, 1);
+    assert.ok(stderr.includes("unknown flag --jsom"), stderr);
+  });
+
+  it("suggests the intended flag", () => {
+    const { stderr } = run(["--jsom"]);
+    assert.ok(stderr.includes("Did you mean --json?"), stderr);
+  });
+
+  it("points a bare positional at --target", () => {
+    const { stderr, code } = run(["postgres"]);
+    assert.strictEqual(code, 1);
+    assert.ok(stderr.includes("--target=postgres"), stderr);
+  });
+
+  it("rejects an unknown --category value", () => {
+    const { stderr, code } = run(["--category=prompt-injection,bogus"]);
+    assert.strictEqual(code, 1);
+    assert.ok(stderr.includes('unknown category "bogus"'), stderr);
+  });
+
+  it("accepts valid --category values", () => {
+    const { code } = run(["--category=prompt-injection", "--help"]);
+    assert.strictEqual(code, 0);
+  });
+
+  // The old flag() derived a short alias from each long flag's first letter,
+  // so -n silently meant --no-color AND --no-telemetry, and -p tripped the
+  // --pro deprecation warning. Short forms are declared explicitly now.
+  it("does not invent single-letter aliases", () => {
+    const { stderr, code } = run(["-p"]);
+    assert.strictEqual(code, 1);
+    assert.ok(!stderr.includes("deprecated"), stderr);
+  });
+
+  it("keeps the declared short aliases working", () => {
+    assert.strictEqual(run(["-V"]).code, 0);
+    assert.strictEqual(run(["-h"]).code, 0);
+  });
+
+  it("--live refuses to prompt when stdin is not a terminal", () => {
+    const { stderr, code } = run(["--live"]);
+    assert.strictEqual(code, 1);
+    assert.ok(stderr.includes("interactive terminal"), stderr);
+  });
+});
+
 describe("CLI basics", () => {
   it("--version prints version", () => {
     const { stdout, code } = run(["--version"]);
